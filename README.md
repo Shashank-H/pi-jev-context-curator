@@ -8,7 +8,7 @@ Before every LLM call, pi fires the `context` event with the full message list. 
 
 1. Groups messages into **units** — an assistant tool-call message plus its tool results stay together as one atomic unit, so curation never orphans a tool result.
 2. Checks each unit against the **judgment checkpoint**: every unit Jev has already judged is recorded by content fingerprint, so past decisions are reused and the same data is never sent to Jev twice.
-3. Sends only the **new units** (those after the checkpoint) to Jev's `/v1/systemone` endpoint with **one yes/no (`noul`) question per unit**: *"Will ANY future response in this conversation likely need this unit?"* All questions evaluate in parallel in a single pass.
+3. Sends only the **new units** (those after the checkpoint) to Jev's `/v1/systemone` endpoint with **one yes/no (`noul`) question per unit**: *"Is this unit likely essential to completing a future response?"* The prompt prefers minimal retention and all questions evaluate in parallel in a single pass.
 4. Units Jev rejects are **permanently discarded** from what the model sees — the removal is re-applied on every subsequent `context` event (pi itself only lets extensions transform the per-call payload, not edit the stored session).
 
 Jev is a good fit here: it returns calibrated probabilities in ~70–500ms, costs $42/B input tokens with free outputs, and is purpose-built for this kind of structured semantic judgment.
@@ -23,7 +23,7 @@ Because each unit is judged once, the per-turn Jev cost stays tiny (usually 1–
 - **System messages are always kept** (they define tools and prompt sections) and are never judged.
 - **The latest unit (current user request) is always kept** for the current turn; it becomes eligible for judgment once newer messages arrive.
 - **Token floor**: curation only runs when estimated context exceeds `CURATOR_JEV_MIN_TOKENS` (default 8000), so small contexts pay no extra latency.
-- **Configurable frequency**: Jev queries run every fifth context call by default, or every Nth call with `CURATOR_JEV_FREQUENCY` / `/context-curator-jev frequency <n>`. Previously judged removals are still applied on calls between Jev queries.
+- **Configurable frequency**: Jev queries run every fifth context call by default, or every Nth call with `CURATOR_JEV_FREQUENCY` / `/jev-context-curator frequency <n>`. Previously judged removals are still applied on calls between Jev queries.
 - The Jev call goes over plain `fetch`, not pi's model registry — it never re-triggers `context` handlers, so there's no recursion.
 - The checkpoint is cleared on `session_start`, so judgments never leak across sessions.
 
@@ -49,7 +49,7 @@ Or drop `extensions/curator-jev/` into `~/.pi/agent/extensions/` (hot-reloads wi
 
 ```
 extensions/curator-jev/
-  index.ts     extension entry — registers the /context-curator-jev command and the context handler
+  index.ts     extension entry — registers the /jev-context-curator command and the context handler
   config.ts    constants + env-based configuration
   keystore.ts  API key resolution and persistence (~/.pi/curator-jev.json)
   units.ts     message introspection + grouping into curation units (+ fingerprints)
@@ -68,7 +68,7 @@ modules are imported relatively and are never loaded as extensions themselves.
 | `TYPESAFE_API_KEY` | — | API key from `console.typesafe.ai/settings/keys`. One of the key sources is required; without it the extension is a no-op. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Override for proxies/mirrors. |
 | `JEV_MODEL` | `jev-latest` | Jev model alias or pinned version. |
-| `CURATOR_JEV_THRESHOLD` | `0.5` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
+| `CURATOR_JEV_THRESHOLD` | `0.7` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
 | `CURATOR_JEV_MIN_TOKENS` | `8000` | Only curate above this estimated context size. |
 | `CURATOR_JEV_FREQUENCY` | `5` | Run a new Jev query every Nth context/model call; `3` means every third call. |
 | `CURATOR_JEV_ENABLED` | `1` | Set to `0` to start disabled. |
@@ -80,30 +80,30 @@ modules are imported relatively and are never loaded as extensions themselves.
 
 You don't have to export the key in your shell. Three sources, in priority order:
 
-1. `/context-curator-jev set-key <key>` — active immediately, and persisted to `~/.pi/curator-jev.json` for future sessions (plaintext, mode `0600` — same convention as pi's own `models.json`).
+1. `/jev-context-curator set-key <key>` — active immediately, and persisted to `~/.pi/curator-jev.json` for future sessions (plaintext, mode `0600` — same convention as pi's own `models.json`).
 2. `TYPESAFE_API_KEY` environment variable.
-3. The persisted key from a previous `/context-curator-jev set-key`.
+3. The persisted key from a previous `/jev-context-curator set-key`.
 
-Run `/context-curator-jev clear-key` to remove the key from both the session and the config file.
+Run `/jev-context-curator clear-key` to remove the key from both the session and the config file.
 
 ## Commands
 
 ```
-/context-curator-jev status            # show state, settings, key source, checkpoint size, discarded totals, session cost
-/context-curator-jev stats             # detailed removal + cost stats for the session
-/context-curator-jev on | off          # toggle curation for the session
-/context-curator-jev set-key <key>     # add your TypeSafe API key (persisted to ~/.pi/curator-jev.json)
-/context-curator-jev clear-key         # remove the stored API key
-/context-curator-jev cost              # show Jev spend this session
-/context-curator-jev reset             # clear the judgment checkpoint (everything gets re-judged)
-/context-curator-jev threshold 0.7     # keep only units Jev is ≥70% sure a future response needs
-/context-curator-jev min-tokens 12000  # raise the token floor
-/context-curator-jev frequency 3       # query Jev every third context/model call
+/jev-context-curator status            # show state, settings, key source, checkpoint size, discarded totals, session cost
+/jev-context-curator stats             # detailed removal + cost stats for the session
+/jev-context-curator on | off          # toggle curation for the session
+/jev-context-curator set-key <key>     # add your TypeSafe API key (persisted to ~/.pi/curator-jev.json)
+/jev-context-curator clear-key         # remove the stored API key
+/jev-context-curator cost              # show Jev spend this session
+/jev-context-curator reset             # clear the judgment checkpoint (everything gets re-judged)
+/jev-context-curator threshold 0.8     # keep only units Jev is ≥80% sure a future response needs
+/jev-context-curator min-tokens 12000  # raise the token floor
+/jev-context-curator frequency 3       # query Jev every third context/model call
 ```
 
 ## Removal stats
 
-`/context-curator-jev stats` shows, for the session:
+`/jev-context-curator stats` shows, for the session:
 
 - units judged, and how many were kept vs permanently removed,
 - total messages / estimated tokens discarded,
@@ -116,7 +116,7 @@ Jev bills **$42 per billion input tokens**; outputs are free. Each curation call
 
 - per-call cost in debug mode (`CURATOR_JEV_DEBUG=1`),
 - a UI notification whenever context is removed, for example `curated context — removed 2,400 tokens (8 messages)`,
-- running session totals in `/context-curator-jev status` and `/context-curator-jev cost`.
+- running session totals in `/jev-context-curator status` and `/jev-context-curator cost`.
 
 ## How the decision prompt works
 

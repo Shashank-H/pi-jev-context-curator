@@ -87,9 +87,9 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		].join("\n");
 	};
 
-	pi.registerCommand("context-curator-jev", {
+	pi.registerCommand("jev-context-curator", {
 		description:
-			"Control the Jev context curator: status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n>",
+			"Control the context pruner: status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n>",
 		handler: async (args, ctx) => {
 			const [subRaw, ...rest] = args.trim().split(/\s+/);
 			const sub = (subRaw || "status").toLowerCase();
@@ -106,7 +106,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					break;
 				case "set-key": {
 					if (!val) {
-						ctx.ui.notify(`[${TAG}] usage: /context-curator-jev set-key <typesafe-api-key>`, "warning");
+						ctx.ui.notify(`[${TAG}] usage: /jev-context-curator set-key <typesafe-api-key>`, "warning");
 						break;
 					}
 					sessionApiKey = val;
@@ -148,7 +148,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				case "threshold": {
 					const n = Number.parseFloat(val);
 					if (!Number.isFinite(n) || n < 0 || n > 1) {
-						ctx.ui.notify(`[${TAG}] usage: /context-curator-jev threshold <0-1>`, "warning");
+						ctx.ui.notify(`[${TAG}] usage: /jev-context-curator threshold <0-1>`, "warning");
 						break;
 					}
 					cfg.threshold = n;
@@ -158,7 +158,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				case "min-tokens": {
 					const n = Number.parseInt(val, 10);
 					if (!Number.isFinite(n) || n < 0) {
-						ctx.ui.notify(`[${TAG}] usage: /context-curator-jev min-tokens <n>`, "warning");
+						ctx.ui.notify(`[${TAG}] usage: /jev-context-curator min-tokens <n>`, "warning");
 						break;
 					}
 					cfg.minTokens = n;
@@ -168,7 +168,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				case "frequency": {
 					const n = Number.parseInt(val, 10);
 					if (!Number.isFinite(n) || n < 1) {
-						ctx.ui.notify(`[${TAG}] usage: /context-curator-jev frequency <n>`, "warning");
+						ctx.ui.notify(`[${TAG}] usage: /jev-context-curator frequency <n>`, "warning");
 						break;
 					}
 					cfg.frequency = n;
@@ -189,7 +189,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 			if (!warnedNoKey) {
 				warnedNoKey = true;
 				ctx.ui.notify(
-					`[${TAG}] No TypeSafe API key — context passes through uncurated. Run /context-curator-jev set-key <key> or set TYPESAFE_API_KEY.`,
+					`[${TAG}] No TypeSafe API key — context passes through uncurated. Run /jev-context-curator set-key <key> or set TYPESAFE_API_KEY.`,
 					"warning",
 				);
 			}
