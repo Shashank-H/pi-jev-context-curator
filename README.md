@@ -14,11 +14,11 @@ Jev is a good fit here: it returns calibrated probabilities in ~70–500ms, cost
 
 ## Safety: fail-open by design
 
-- **No `TYPESAFE_API_KEY`** → context passes through untouched (one warning per session).
+- **No API key** → context passes through untouched (one warning per session).
 - **Any Jev API error / timeout / rate-limit** → context passes through untouched.
 - **System messages are always kept** (they define tools and prompt sections).
 - **The latest unit (current user request) is always kept.**
-- **Token floor**: curation only runs when estimated context exceeds `JEV_CURATOR_MIN_TOKENS` (default 8000), so small contexts pay no extra latency.
+- **Token floor**: curation only runs when estimated context exceeds `CURATOR_JEV_MIN_TOKENS` (default 8000), so small contexts pay no extra latency.
 - The Jev call goes over plain `fetch`, not pi's model registry — it never re-triggers `context` handlers, so there's no recursion.
 
 ## Install
@@ -29,30 +29,65 @@ As a pi package (auto-discovers `extensions/`):
 pi install git:github.com/Shashank-H/pi-jev-context-curator
 ```
 
-Or drop `extensions/jev-context-curator.ts` into `~/.pi/agent/extensions/` (hot-reloads with `/reload`).
+Or drop `extensions/curator-jev/` into `~/.pi/agent/extensions/` (hot-reloads with `/reload`).
+
+## Layout
+
+```
+extensions/curator-jev/
+  index.ts     extension entry — registers the /curator-jev command and the context handler
+  config.ts    constants + env-based configuration
+  keystore.ts  API key resolution and persistence (~/.pi/curator-jev.json)
+  units.ts     message introspection + grouping into curation units
+  jev.ts       the Jev decision call (/v1/systemone)
+  stats.ts     session cost tracking
+```
+
+pi discovers the extension via `extensions/curator-jev/index.ts`; the other
+modules are imported relatively and are never loaded as extensions themselves.
 
 ## Configuration
 
 | Env var | Default | Description |
 |---|---|---|
-| `TYPESAFE_API_KEY` | — | **Required.** API key from `console.typesafe.ai/settings/keys`. Without it, the extension is a no-op. |
+| `TYPESAFE_API_KEY` | — | API key from `console.typesafe.ai/settings/keys`. One of the key sources is required; without it the extension is a no-op. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Override for proxies/mirrors. |
 | `JEV_MODEL` | `jev-latest` | Jev model alias or pinned version. |
-| `JEV_CURATOR_THRESHOLD` | `0.5` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
-| `JEV_CURATOR_MIN_TOKENS` | `8000` | Only curate above this estimated context size. |
-| `JEV_CURATOR_ENABLED` | `1` | Set to `0` to start disabled. |
-| `JEV_CURATOR_DEBUG` | — | Set to `1` for per-turn curation logs. |
+| `CURATOR_JEV_THRESHOLD` | `0.5` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
+| `CURATOR_JEV_MIN_TOKENS` | `8000` | Only curate above this estimated context size. |
+| `CURATOR_JEV_ENABLED` | `1` | Set to `0` to start disabled. |
+| `CURATOR_JEV_DEBUG` | — | Set to `1` for per-turn curation logs. |
 
 > **Note:** as of September 2026, TypeSafe AI's direct API is in **waitlisted early access** — you need an approved key from `console.typesafe.ai`. Until then the extension passes context through unchanged.
+
+## API keys
+
+You don't have to export the key in your shell. Three sources, in priority order:
+
+1. `/curator-jev set-key <key>` — active immediately, and persisted to `~/.pi/curator-jev.json` for future sessions (plaintext, mode `0600` — same convention as pi's own `models.json`).
+2. `TYPESAFE_API_KEY` environment variable.
+3. The persisted key from a previous `/curator-jev set-key`.
+
+Run `/curator-jev clear-key` to remove the key from both the session and the config file.
 
 ## Commands
 
 ```
-/jev-curator status            # show state and settings
-/jev-curator on | off          # toggle curation for the session
-/jev-curator threshold 0.7    # keep only units Jev is ≥70% sure are needed
-/jev-curator min-tokens 12000  # raise the token floor
+/curator-jev status            # show state, settings, key source, and session cost
+/curator-jev on | off          # toggle curation for the session
+/curator-jev set-key <key>     # add your TypeSafe API key (persisted to ~/.pi/curator-jev.json)
+/curator-jev clear-key          # remove the stored API key
+/curator-jev cost               # show Jev spend this session
+/curator-jev threshold 0.7     # keep only units Jev is ≥70% sure are needed
+/curator-jev min-tokens 12000  # raise the token floor
 ```
+
+## Cost
+
+Jev bills **$42 per billion input tokens**; outputs are free. Each curation call is small (the truncated transcript), so a single call typically costs a fraction of a cent. The extension tracks usage from Jev's `usage.input_tokens` response field and shows:
+
+- per-call cost in debug mode (`CURATOR_JEV_DEBUG=1`),
+- running session totals in `/curator-jev status` and `/curator-jev cost`.
 
 ## How the decision prompt works
 
