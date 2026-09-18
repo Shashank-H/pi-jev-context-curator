@@ -23,7 +23,7 @@ Because each unit is judged once, the per-turn Jev cost stays tiny (usually 1–
 - **System messages are always kept** (they define tools and prompt sections) and are never judged.
 - **The latest unit (current user request) is always kept** for the current turn; it becomes eligible for judgment once newer messages arrive.
 - **Token floor**: curation only runs when estimated context exceeds `CURATOR_JEV_MIN_TOKENS` (default 8000), so small contexts pay no extra latency.
-- **Configurable frequency**: Jev queries run on every context call by default, or every Nth call with `CURATOR_JEV_FREQUENCY` / `/context-curator-jev frequency <n>`. Previously judged removals are still applied on calls between Jev queries.
+- **Configurable frequency**: Jev queries run every fifth context call by default, or every Nth call with `CURATOR_JEV_FREQUENCY` / `/context-curator-jev frequency <n>`. Previously judged removals are still applied on calls between Jev queries.
 - The Jev call goes over plain `fetch`, not pi's model registry — it never re-triggers `context` handlers, so there's no recursion.
 - The checkpoint is cleared on `session_start`, so judgments never leak across sessions.
 
@@ -70,7 +70,7 @@ modules are imported relatively and are never loaded as extensions themselves.
 | `JEV_MODEL` | `jev-latest` | Jev model alias or pinned version. |
 | `CURATOR_JEV_THRESHOLD` | `0.5` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
 | `CURATOR_JEV_MIN_TOKENS` | `8000` | Only curate above this estimated context size. |
-| `CURATOR_JEV_FREQUENCY` | `1` | Run a new Jev query every Nth context/model call; `3` means every third call. |
+| `CURATOR_JEV_FREQUENCY` | `5` | Run a new Jev query every Nth context/model call; `3` means every third call. |
 | `CURATOR_JEV_ENABLED` | `1` | Set to `0` to start disabled. |
 | `CURATOR_JEV_DEBUG` | — | Set to `1` for per-turn curation logs. |
 

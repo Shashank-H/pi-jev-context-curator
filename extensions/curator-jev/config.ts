@@ -6,7 +6,7 @@ export const DEFAULT_BASE_URL = "https://api.typesafe.ai";
 export const DEFAULT_MODEL = "jev-latest";
 export const DEFAULT_THRESHOLD = 0.5;
 export const DEFAULT_MIN_TOKENS = 8000;
-export const DEFAULT_FREQUENCY = 1;
+export const DEFAULT_FREQUENCY = 5;
 
 /** Keep Jev's `state` comfortably under its 32k token cap. */
 export const MAX_STATE_TOKENS = 28000;
