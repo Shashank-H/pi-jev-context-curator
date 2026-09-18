@@ -2,7 +2,7 @@
  * API key management.
  *
  * Resolution order:
- *   1. key set via `/curator-jev set-key` (current session only, in memory)
+ *   1. key set via `/context-curator-jev set-key` (current session only, in memory)
  *   2. `TYPESAFE_API_KEY` environment variable
  *   3. key persisted in `~/.pi/curator-jev.json` by a previous `set-key`
  *
@@ -51,7 +51,7 @@ export function clearPersistedKey(): void {
 
 export function resolveApiKey(sessionKey: string | undefined): ApiKeyResolution {
 	if (sessionKey) {
-		return { key: sessionKey, source: "set via /curator-jev set-key (this session)" };
+		return { key: sessionKey, source: "set via /context-curator-jev set-key (this session)" };
 	}
 	if (process.env.TYPESAFE_API_KEY) {
 		return { key: process.env.TYPESAFE_API_KEY, source: "TYPESAFE_API_KEY env var" };

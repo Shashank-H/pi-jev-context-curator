@@ -55,6 +55,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	let enabled = process.env.CURATOR_JEV_ENABLED !== "0";
 	let sessionApiKey: string | undefined;
 	let warnedNoKey = false;
+	let contextCalls = 0;
 
 	const debug = (ctx: ExtensionContext, msg: string) => {
 		if (cfg.debug) ctx.ui.notify(`[${TAG}] ${msg}`, "info");
@@ -68,23 +69,27 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		const freshCost = createStats();
 		Object.assign(stats, freshCost);
 		warnedNoKey = false;
+		contextCalls = 0;
 	});
 
-	const statusLine = (): string => {
+	const statusText = (): string => {
 		const { key, source } = resolveApiKey(sessionApiKey);
-		return (
-			`[${TAG}] ${enabled ? "enabled" : "disabled"} | model=${cfg.model} ` +
-			`| threshold=${cfg.threshold} | min-tokens=${cfg.minTokens} ` +
-			`| api-key=${key ? `${maskKey(key)} (${source})` : "MISSING"} ` +
-			`| judged=${checkpoint.judgedCount} units ` +
-			`| discarded=${removal.messagesRemoved} msgs (~${formatTokens(removal.tokensRemoved)} tokens) ` +
-			`| session cost=${formatUsd(stats.costUsd)}`
-		);
+		return [
+			`┌─ ${TAG} ─────────────────────────────`,
+			`│ ${enabled ? "● enabled" : "○ disabled"}   model: ${cfg.model}`,
+			`│ threshold: ${cfg.threshold}   min tokens: ${cfg.minTokens.toLocaleString()}`,
+			`│ Jev frequency: every ${cfg.frequency} context call(s)`,
+			`│ API key: ${key ? `${maskKey(key)} (${source})` : "MISSING"}`,
+			`│ judged: ${checkpoint.judgedCount} units   calls: ${contextCalls}`,
+			`│ discarded: ${removal.messagesRemoved} messages (~${formatTokens(removal.tokensRemoved)} tokens)`,
+			`│ session cost: ${formatUsd(stats.costUsd)}`,
+			"└────────────────────────────────────",
+		].join("\n");
 	};
 
-	pi.registerCommand("curator-jev", {
+	pi.registerCommand("context-curator-jev", {
 		description:
-			"Control the Jev context curator: status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n>",
+			"Control the Jev context curator: status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n>",
 		handler: async (args, ctx) => {
 			const [subRaw, ...rest] = args.trim().split(/\s+/);
 			const sub = (subRaw || "status").toLowerCase();
@@ -101,7 +106,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					break;
 				case "set-key": {
 					if (!val) {
-						ctx.ui.notify(`[${TAG}] usage: /curator-jev set-key <typesafe-api-key>`, "warning");
+						ctx.ui.notify(`[${TAG}] usage: /context-curator-jev set-key <typesafe-api-key>`, "warning");
 						break;
 					}
 					sessionApiKey = val;
@@ -143,7 +148,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				case "threshold": {
 					const n = Number.parseFloat(val);
 					if (!Number.isFinite(n) || n < 0 || n > 1) {
-						ctx.ui.notify(`[${TAG}] usage: /curator-jev threshold <0-1>`, "warning");
+						ctx.ui.notify(`[${TAG}] usage: /context-curator-jev threshold <0-1>`, "warning");
 						break;
 					}
 					cfg.threshold = n;
@@ -153,27 +158,38 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				case "min-tokens": {
 					const n = Number.parseInt(val, 10);
 					if (!Number.isFinite(n) || n < 0) {
-						ctx.ui.notify(`[${TAG}] usage: /curator-jev min-tokens <n>`, "warning");
+						ctx.ui.notify(`[${TAG}] usage: /context-curator-jev min-tokens <n>`, "warning");
 						break;
 					}
 					cfg.minTokens = n;
 					ctx.ui.notify(`[${TAG}] min tokens set to ${n}`, "info");
 					break;
 				}
+				case "frequency": {
+					const n = Number.parseInt(val, 10);
+					if (!Number.isFinite(n) || n < 1) {
+						ctx.ui.notify(`[${TAG}] usage: /context-curator-jev frequency <n>`, "warning");
+						break;
+					}
+					cfg.frequency = n;
+					ctx.ui.notify(`[${TAG}] Jev queries now run every ${n} context calls`, "info");
+					break;
+				}
 				default:
-					ctx.ui.notify(statusLine(), "info");
+					ctx.ui.notify(statusText(), "info");
 			}
 		},
 	});
 
 	pi.on("context", async (event, ctx) => {
 		if (!enabled) return;
+		contextCalls++;
 		const { key: apiKey } = resolveApiKey(sessionApiKey);
 		if (!apiKey) {
 			if (!warnedNoKey) {
 				warnedNoKey = true;
 				ctx.ui.notify(
-					`[${TAG}] No TypeSafe API key — context passes through uncurated. Run /curator-jev set-key <key> or set TYPESAFE_API_KEY.`,
+					`[${TAG}] No TypeSafe API key — context passes through uncurated. Run /context-curator-jev set-key <key> or set TYPESAFE_API_KEY.`,
 					"warning",
 				);
 			}
@@ -214,7 +230,8 @@ export default function curatorJev(pi: ExtensionAPI): void {
 
 		let judgedNow = 0;
 		let keptNow = 0;
-		if (newUnits.length > 0) {
+		const queryDue = contextCalls % cfg.frequency === 0;
+		if (newUnits.length > 0 && queryDue) {
 			debug(
 				ctx,
 				`judging ${newUnits.length} new units (${reused} reused from checkpoint) via ${cfg.model}…`,
@@ -256,6 +273,8 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				`judged ${judgedNow} units: kept ${keptNow}, discarded ${discardedUnits} ` +
 					`(cost ${formatUsd(callCost)} this call, ${formatUsd(stats.costUsd)} this session)`,
 			);
+		} else if (newUnits.length > 0 && !queryDue) {
+			debug(ctx, `skipping Jev query on context call ${contextCalls} (frequency 1/${cfg.frequency})`);
 		}
 
 		// Apply removals: drop every message belonging to a discarded unit.
@@ -283,6 +302,10 @@ export default function curatorJev(pi: ExtensionAPI): void {
 			`context: ${messages.length} messages (~${formatTokens(estTokens)} tokens) -> ` +
 				`removed ${removedMessages} (~${formatTokens(removedTokens)}), ` +
 				`kept ${keptMessages.length} | discarded total this session: ${removal.messagesRemoved} msgs (~${formatTokens(removal.tokensRemoved)} tokens)`,
+		);
+		ctx.ui.notify(
+			`[${TAG}] curated context — removed ${formatTokens(removedTokens)} tokens (${removedMessages} messages)`,
+			"info",
 		);
 		return { messages: keptMessages };
 	});
