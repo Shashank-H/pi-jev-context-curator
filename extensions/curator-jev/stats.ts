@@ -48,6 +48,9 @@ export interface RemovalStats {
 	unitsRemoved: number;
 	messagesRemoved: number;
 	tokensRemoved: number;
+	/** Cumulative context volume removed across all curation passes this session. */
+	sessionSavedMessages: number;
+	sessionSavedTokens: number;
 	/** Last curation pass: totals, removed, and kept for the current context. */
 	lastTotalMessages: number;
 	lastTotalTokens: number;
@@ -61,6 +64,8 @@ export function createRemovalStats(): RemovalStats {
 		unitsRemoved: 0,
 		messagesRemoved: 0,
 		tokensRemoved: 0,
+		sessionSavedMessages: 0,
+		sessionSavedTokens: 0,
 		lastTotalMessages: 0,
 		lastTotalTokens: 0,
 		lastRemovedMessages: 0,
@@ -90,6 +95,8 @@ export function recordCuration(
 	removedTokens: number,
 ): void {
 	r.unitsJudged += judgedUnits;
+	r.sessionSavedMessages += removedMessages;
+	r.sessionSavedTokens += removedTokens;
 	r.lastTotalMessages = totalMessages;
 	r.lastTotalTokens = totalTokens;
 	r.lastRemovedMessages = removedMessages;
@@ -102,7 +109,8 @@ export function formatStatsSummary(cost: SessionStats, r: RemovalStats): string 
 	return (
 		`[${TAG}] session stats\n` +
 		`  judged: ${r.unitsJudged} units (${r.unitsJudged - r.unitsRemoved} kept, ${r.unitsRemoved} removed)\n` +
-		`  discarded total: ${r.messagesRemoved} messages (~${formatTokens(r.tokensRemoved)} tokens)\n` +
+		`  saved this session: ${r.sessionSavedMessages} messages (~${formatTokens(r.sessionSavedTokens)} tokens)\n` +
+		`  discarded by new judgments: ${r.messagesRemoved} messages (~${formatTokens(r.tokensRemoved)} tokens)\n` +
 		`  last context: ${r.lastTotalMessages} messages (~${formatTokens(r.lastTotalTokens)} tokens) ` +
 		`-> removed ${r.lastRemovedMessages} (~${formatTokens(r.lastRemovedTokens)}), ` +
 		`kept ${keptMessages} (~${formatTokens(keptTokens)})\n` +

@@ -82,13 +82,15 @@ export async function askJev(
 			type: "noul",
 			instructions:
 				`Consider ONLY context unit [${i}] (${newUnits[i].label}) in the transcript above. ` +
-				`Will ANY future response in this conversation likely need the content of unit [${i}]? ` +
-				`This unit will be PERMANENTLY discarded if you answer no, so answer yes if there is any plausible future need: ` +
-				`task instructions, facts, file contents, code, or tool results a later response may depend on. ` +
-				`Answer no only if no future response could need it.`,
+				`Is this context unit likely ESSENTIAL to completing a future response in this conversation? ` +
+				`Keep it only if a later response is likely to directly depend on its unique instructions, facts, ` +
+				`file contents, code, or tool results. Do NOT keep it merely because it provides background, ` +
+				`might be useful, or could possibly become relevant. Prefer discarding transient reasoning, ` +
+				`intermediate tool output, already-summarized information, and redundant context. ` +
+				`When uncertain, answer no.`,
 			criteria: {
-				true: "Some future response may need this unit's content — keep it",
-				false: "No future response will need this unit — safe to permanently discard",
+				true: "This unit is likely essential to a future response — keep it",
+				false: "This unit is not essential or is uncertain — permanently discard it",
 			},
 		};
 	}
