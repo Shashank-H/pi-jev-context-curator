@@ -1,6 +1,6 @@
 /** Shared constants and environment-based configuration for curator-jev. */
 
-export const TAG = "curator-jev";
+export const TAG = "jev-context-curator";
 
 export const DEFAULT_BASE_URL = "https://api.typesafe.ai";
 export const DEFAULT_MODEL = "jev-latest";

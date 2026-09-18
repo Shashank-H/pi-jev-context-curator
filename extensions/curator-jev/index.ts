@@ -80,8 +80,8 @@ export default function curatorJev(pi: ExtensionAPI): void {
 			`│ threshold: ${cfg.threshold}   min tokens: ${cfg.minTokens.toLocaleString()}`,
 			`│ Jev frequency: every ${cfg.frequency} context call(s)`,
 			`│ API key: ${key ? `${maskKey(key)} (${source})` : "MISSING"}`,
-			`│ judged: ${checkpoint.judgedCount} units   calls: ${contextCalls}`,
-			`│ discarded: ${removal.messagesRemoved} messages (~${formatTokens(removal.tokensRemoved)} tokens)`,
+			`│ judged: ${checkpoint.judgedCount} units   context calls: ${contextCalls}`,
+			`│ discarded (new judgments): ${removal.messagesRemoved} messages (~${formatTokens(removal.tokensRemoved)} tokens)`,
 			`│ session cost: ${formatUsd(stats.costUsd)}`,
 			"└────────────────────────────────────",
 		].join("\n");
@@ -304,7 +304,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				`kept ${keptMessages.length} | discarded total this session: ${removal.messagesRemoved} msgs (~${formatTokens(removal.tokensRemoved)} tokens)`,
 		);
 		ctx.ui.notify(
-			`[${TAG}] curated context — removed ${formatTokens(removedTokens)} tokens (${removedMessages} messages)`,
+			`[${TAG}] curated context — removed this pass: ${formatTokens(removedTokens)} tokens (${removedMessages} messages)`,
 			"info",
 		);
 		return { messages: keptMessages };
