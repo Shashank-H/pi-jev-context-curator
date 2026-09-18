@@ -74,6 +74,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 
 	const statusText = (): string => {
 		const { key, source } = resolveApiKey(sessionApiKey);
+		const untilNextCheck = cfg.frequency - (contextCalls % cfg.frequency);
 		return [
 			`┌─ ${TAG} ─────────────────────────────`,
 			`│ ${enabled ? "● enabled" : "○ disabled"}   model: ${cfg.model}`,
@@ -81,7 +82,9 @@ export default function curatorJev(pi: ExtensionAPI): void {
 			`│ Jev frequency: every ${cfg.frequency} context call(s)`,
 			`│ API key: ${key ? `${maskKey(key)} (${source})` : "MISSING"}`,
 			`│ judged: ${checkpoint.judgedCount} units   context calls: ${contextCalls}`,
+			`│ Jev calls: ${stats.calls}   next check: in ${untilNextCheck} context call(s)`,
 			`│ saved this session: ${removal.sessionSavedMessages} messages (~${formatTokens(removal.sessionSavedTokens)} tokens)`,
+			`│ last pass removed: ${removal.lastRemovedMessages} messages (~${formatTokens(removal.lastRemovedTokens)} tokens)`,
 			`│ session cost: ${formatUsd(stats.costUsd)}`,
 			"└────────────────────────────────────",
 		].join("\n");
