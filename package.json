@@ -15,7 +15,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Shashank-H/pi-jev-context-curator.git"
+    "url": "https://github.com/Shashank-H/pi-jev-context-curator"
   },
   "bugs": {
     "url": "https://github.com/Shashank-H/pi-jev-context-curator/issues"
