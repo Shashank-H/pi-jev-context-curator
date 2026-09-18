@@ -1,9 +1,15 @@
 /**
  * The Jev decision call: one `/v1/systemone` request with a yes/no ("noul")
- * question per context unit — "will the next response likely need this unit?"
+ * question per new context unit.
  *
- * Uses plain `fetch` (not pi's model registry) so it never re-triggers
- * `context` handlers — no recursion.
+ * The question is framed for permanent removal: "will ANY future response in
+ * this conversation need this unit?" A "no" means the unit is discarded for
+ * good, so the bar for answering no is high and the safe direction on
+ * uncertainty is to keep.
+ *
+ * Only units after the checkpoint are sent: Jev never sees the same unit
+ * twice. Uses plain `fetch` (not pi's model registry) so it never
+ * re-triggers `context` handlers — no recursion.
  */
 
 import {
@@ -27,7 +33,9 @@ interface JevResponse {
 }
 
 export interface JevDecision {
-	/** Unit indexes to keep (as indexes into the `units` array). */
+	/** Local indexes (into the `newUnits` array) that were actually judged. */
+	judged: number[];
+	/** Subset of `judged` to keep. */
 	keep: Set<number>;
 	inputTokens: number;
 }
@@ -37,46 +45,50 @@ function truncate(s: string, maxChars: number): string {
 }
 
 /**
- * Ask Jev which units are likely needed for the next LLM response.
+ * Ask Jev which of the new units any future response might need.
  * Returns the decision, or `null` on any failure — the caller must fail
- * open (keep everything) when this returns null.
+ * open (keep everything, record nothing) when this returns null.
+ *
+ * Units that do not fit Jev's state token budget are left out of `judged`
+ * so the caller leaves them unjudged for the next event instead of
+ * permanently keeping them without a decision.
  */
 export async function askJev(
-	units: Unit[],
-	/** Unit indexes Jev is allowed to judge (excludes always-keep units). */
-	decidable: number[],
+	newUnits: Unit[],
 	apiKey: string,
 	cfg: CuratorConfig,
 	signal: AbortSignal | undefined,
 ): Promise<JevDecision | null> {
-	// Build the numbered transcript as Jev's `state`. Question keys are not
-	// sent to the model, so each question's instructions name its unit number.
-	const lines = units.map((u, i) => `[${i}] (${u.label})\n${truncate(u.text, MAX_UNIT_CHARS)}`);
+	if (newUnits.length === 0) return { judged: [], keep: new Set(), inputTokens: 0 };
 
-	// Enforce Jev's state token budget: drop the *oldest* decidable units from
-	// the decision set (they are kept, not dropped).
-	let stateText = lines.join("\n\n");
-	const keep = new Set<number>(units.map((_, i) => i).filter((i) => !decidable.includes(i)));
-	const active = [...decidable];
-	while (active.length > 0 && estimateTokens(stateText) > MAX_STATE_TOKENS) {
-		const dropped = active.shift()!;
-		keep.add(dropped);
-		stateText = active.map((i) => lines[i]).join("\n\n");
+	const lines = newUnits.map((u, i) => `[${i}] (${u.label})\n${truncate(u.text, MAX_UNIT_CHARS)}`);
+
+	// Newest units first within the state budget; the rest stay unjudged
+	// for the next event. The newest unit is always included so we make
+	// progress even if a single unit exceeds the budget on its own.
+	const maxChars = MAX_STATE_TOKENS * 4;
+	const selected: number[] = [];
+	let used = 0;
+	for (let i = newUnits.length - 1; i >= 0; i--) {
+		if (selected.length > 0 && used + lines[i].length > maxChars) break;
+		used += lines[i].length;
+		selected.unshift(i);
 	}
-	if (active.length === 0) return { keep, inputTokens: 0 };
+	const stateText = selected.map((i) => lines[i]).join("\n\n");
 
 	const questions: Record<string, JevQuestion> = {};
-	for (const i of active) {
+	for (const i of selected) {
 		questions[`u${i}`] = {
 			type: "noul",
 			instructions:
-				`Consider ONLY context unit [${i}] (${units[i].label}) in the transcript above. ` +
-				`Will the assistant's next response likely need the content of unit [${i}]? ` +
-				`Answer yes if it holds task instructions, facts, file contents, code, or tool results the next response may depend on. ` +
-				`Answer no only if the next response can clearly be produced without it.`,
+				`Consider ONLY context unit [${i}] (${newUnits[i].label}) in the transcript above. ` +
+				`Will ANY future response in this conversation likely need the content of unit [${i}]? ` +
+				`This unit will be PERMANENTLY discarded if you answer no, so answer yes if there is any plausible future need: ` +
+				`task instructions, facts, file contents, code, or tool results a later response may depend on. ` +
+				`Answer no only if no future response could need it.`,
 			criteria: {
-				true: "The next response likely depends on this unit's content",
-				false: "The next response can be produced without this unit",
+				true: "Some future response may need this unit's content — keep it",
+				false: "No future response will need this unit — safe to permanently discard",
 			},
 		};
 	}
@@ -104,14 +116,15 @@ export async function askJev(
 		const data = (await res.json()) as JevResponse;
 		if (!data.answers) throw new Error("Jev response had no answers");
 
-		for (const i of active) {
+		const keep = new Set<number>();
+		for (const i of selected) {
 			const ans = data.answers[`u${i}`];
 			const p = ans?.noul;
-			if (typeof p === "number" && p >= cfg.threshold) keep.add(i);
-			// Non-numeric/missing answer -> drop nothing: keep the unit.
-			else if (typeof p !== "number") keep.add(i);
+			// Keep on yes (>= threshold), and on any non-numeric/missing
+			// answer: never discard on an undecided question.
+			if (typeof p !== "number" || p >= cfg.threshold) keep.add(i);
 		}
-		return { keep, inputTokens: data.usage?.input_tokens ?? 0 };
+		return { judged: selected, keep, inputTokens: data.usage?.input_tokens ?? 0 };
 	} catch {
 		return null;
 	} finally {

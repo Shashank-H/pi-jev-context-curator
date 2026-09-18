@@ -1,6 +1,6 @@
-/** Session-scoped tracking of Jev API usage and estimated cost. */
+/** Session-scoped tracking of Jev API usage, estimated cost, and removals. */
 
-import { JEV_USD_PER_MTOK_INPUT } from "./config.ts";
+import { JEV_USD_PER_MTOK_INPUT, TAG } from "./config.ts";
 
 export interface SessionStats {
 	calls: number;
@@ -32,4 +32,80 @@ export function formatUsd(n: number): string {
 	if (n === 0) return "$0";
 	if (n < 0.01) return `$${n.toFixed(6)}`;
 	return `$${n.toFixed(4)}`;
+}
+
+/** Compact token count: 31000 -> "31k", 1500 -> "1.5k". */
+export function formatTokens(n: number): string {
+	if (n < 1000) return `${n}`;
+	const k = n / 1000;
+	return `${k >= 100 ? Math.round(k) : k.toFixed(1)}k`;
+}
+
+export interface RemovalStats {
+	/** Units Jev has judged this session. */
+	unitsJudged: number;
+	/** Units permanently discarded (counted once, at judgment time). */
+	unitsRemoved: number;
+	messagesRemoved: number;
+	tokensRemoved: number;
+	/** Last curation pass: totals, removed, and kept for the current context. */
+	lastTotalMessages: number;
+	lastTotalTokens: number;
+	lastRemovedMessages: number;
+	lastRemovedTokens: number;
+}
+
+export function createRemovalStats(): RemovalStats {
+	return {
+		unitsJudged: 0,
+		unitsRemoved: 0,
+		messagesRemoved: 0,
+		tokensRemoved: 0,
+		lastTotalMessages: 0,
+		lastTotalTokens: 0,
+		lastRemovedMessages: 0,
+		lastRemovedTokens: 0,
+	};
+}
+
+/** Record newly judged units that were permanently discarded. */
+export function recordDiscarded(
+	r: RemovalStats,
+	units: number,
+	messages: number,
+	tokens: number,
+): void {
+	r.unitsRemoved += units;
+	r.messagesRemoved += messages;
+	r.tokensRemoved += tokens;
+}
+
+/** Record the outcome of one curation pass over the current context. */
+export function recordCuration(
+	r: RemovalStats,
+	judgedUnits: number,
+	totalMessages: number,
+	totalTokens: number,
+	removedMessages: number,
+	removedTokens: number,
+): void {
+	r.unitsJudged += judgedUnits;
+	r.lastTotalMessages = totalMessages;
+	r.lastTotalTokens = totalTokens;
+	r.lastRemovedMessages = removedMessages;
+	r.lastRemovedTokens = removedTokens;
+}
+
+export function formatStatsSummary(cost: SessionStats, r: RemovalStats): string {
+	const keptMessages = r.lastTotalMessages - r.lastRemovedMessages;
+	const keptTokens = r.lastTotalTokens - r.lastRemovedTokens;
+	return (
+		`[${TAG}] session stats\n` +
+		`  judged: ${r.unitsJudged} units (${r.unitsJudged - r.unitsRemoved} kept, ${r.unitsRemoved} removed)\n` +
+		`  discarded total: ${r.messagesRemoved} messages (~${formatTokens(r.tokensRemoved)} tokens)\n` +
+		`  last context: ${r.lastTotalMessages} messages (~${formatTokens(r.lastTotalTokens)} tokens) ` +
+		`-> removed ${r.lastRemovedMessages} (~${formatTokens(r.lastRemovedTokens)}), ` +
+		`kept ${keptMessages} (~${formatTokens(keptTokens)})\n` +
+		`  jev: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens, cost ${formatUsd(cost.costUsd)}`
+	);
 }

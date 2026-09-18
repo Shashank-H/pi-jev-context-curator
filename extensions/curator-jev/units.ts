@@ -6,6 +6,7 @@
  * Grouping this way guarantees curation never orphans a tool result.
  */
 
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 export interface Unit {
@@ -84,6 +85,15 @@ export function describeMessage(m: AgentMessage): { label: string; text: string 
 
 export function estimateTokens(text: string): number {
 	return Math.ceil(text.length / 4);
+}
+
+/**
+ * Content fingerprint identifying a unit across `context` events.
+ * Identical units (same label and text) share a fingerprint, so a unit Jev
+ * already judged is recognized without being sent to Jev again.
+ */
+export function fingerprintUnit(u: Unit): string {
+	return createHash("sha256").update(u.label + "\n" + u.text, "utf8").digest("hex");
 }
 
 function makeUnit(messages: AgentMessage[], indexes: number[]): Unit {
