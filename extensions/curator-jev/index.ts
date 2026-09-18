@@ -81,7 +81,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 			`│ Jev frequency: every ${cfg.frequency} context call(s)`,
 			`│ API key: ${key ? `${maskKey(key)} (${source})` : "MISSING"}`,
 			`│ judged: ${checkpoint.judgedCount} units   context calls: ${contextCalls}`,
-			`│ discarded (new judgments): ${removal.messagesRemoved} messages (~${formatTokens(removal.tokensRemoved)} tokens)`,
+			`│ saved this session: ${removal.sessionSavedMessages} messages (~${formatTokens(removal.sessionSavedTokens)} tokens)`,
 			`│ session cost: ${formatUsd(stats.costUsd)}`,
 			"└────────────────────────────────────",
 		].join("\n");
