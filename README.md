@@ -107,7 +107,7 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 
 - units judged, and how many were kept vs permanently removed,
 - total messages / estimated tokens discarded,
-- the last curation pass: total context → removed vs kept,
+- cumulative messages and estimated tokens removed this session,
 - Jev calls, input tokens, and estimated cost.
 
 ## Cost
@@ -115,8 +115,8 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 Jev bills **$42 per billion input tokens**; outputs are free. Each curation call is small (the truncated transcript), so a single call typically costs a fraction of a cent. The extension tracks usage from Jev's `usage.input_tokens` response field and shows:
 
 - per-call cost in debug mode (`CURATOR_JEV_DEBUG=1`),
-- a UI notification whenever context is removed, for example `curated context — removed 2,400 tokens (8 messages)`,
-- cumulative estimated tokens saved in `/jev-context-curator status`, plus current-pass removal details and the next scheduled Jev check.
+- a UI notification after context is removed showing cumulative savings, for example `curated context — cumulative removed: 2,400 tokens (8 messages)`,
+- cumulative estimated tokens removed in `/jev-context-curator status`, plus the next scheduled Jev check.
 
 ## How the decision prompt works
 
