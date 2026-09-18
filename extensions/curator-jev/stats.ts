@@ -109,11 +109,10 @@ export function formatStatsSummary(cost: SessionStats, r: RemovalStats): string 
 	return (
 		`[${TAG}] session stats\n` +
 		`  judged: ${r.unitsJudged} units (${r.unitsJudged - r.unitsRemoved} kept, ${r.unitsRemoved} removed)\n` +
-		`  saved this session: ${r.sessionSavedMessages} messages (~${formatTokens(r.sessionSavedTokens)} tokens)\n` +
+		`  cumulative removed: ${r.sessionSavedMessages} messages (~${formatTokens(r.sessionSavedTokens)} tokens)\n` +
 		`  discarded by new judgments: ${r.messagesRemoved} messages (~${formatTokens(r.tokensRemoved)} tokens)\n` +
 		`  last context: ${r.lastTotalMessages} messages (~${formatTokens(r.lastTotalTokens)} tokens) ` +
-		`-> removed ${r.lastRemovedMessages} (~${formatTokens(r.lastRemovedTokens)}), ` +
-		`kept ${keptMessages} (~${formatTokens(keptTokens)})\n` +
+		`-> kept ${keptMessages} (~${formatTokens(keptTokens)})\n` +
 		`  jev: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens, cost ${formatUsd(cost.costUsd)}`
 	);
 }
