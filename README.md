@@ -68,7 +68,7 @@ modules are imported relatively and are never loaded as extensions themselves.
 | `TYPESAFE_API_KEY` | — | API key from `console.typesafe.ai/settings/keys`. One of the key sources is required; without it the extension is a no-op. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Override for proxies/mirrors. |
 | `JEV_MODEL` | `jev-latest` | Jev model alias or pinned version. |
-| `CURATOR_JEV_THRESHOLD` | `0.7` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
+| `CURATOR_JEV_THRESHOLD` | `0.5` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
 | `CURATOR_JEV_MIN_TOKENS` | `8000` | Only curate above this estimated context size. |
 | `CURATOR_JEV_FREQUENCY` | `5` | Run a new Jev query every Nth context/model call; `3` means every third call. |
 | `CURATOR_JEV_ENABLED` | `1` | Set to `0` to start disabled. |
@@ -89,7 +89,7 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 ## Commands
 
 ```
-/jev-context-curator status            # show state, settings, key source, checkpoint size, discarded totals, session cost
+/jev-context-curator status            # show state, settings, key source, checkpoint size, session savings, session cost
 /jev-context-curator stats             # detailed removal + cost stats for the session
 /jev-context-curator on | off          # toggle curation for the session
 /jev-context-curator set-key <key>     # add your TypeSafe API key (persisted to ~/.pi/curator-jev.json)
@@ -116,7 +116,7 @@ Jev bills **$42 per billion input tokens**; outputs are free. Each curation call
 
 - per-call cost in debug mode (`CURATOR_JEV_DEBUG=1`),
 - a UI notification whenever context is removed, for example `curated context — removed 2,400 tokens (8 messages)`,
-- running session totals in `/jev-context-curator status` and `/jev-context-curator cost`.
+- cumulative estimated tokens saved in `/jev-context-curator status`, plus current-pass removal details and the next scheduled Jev check.
 
 ## How the decision prompt works
 
@@ -125,9 +125,9 @@ Jev's `/v1/systemone` takes a `state` (the numbered new units after the checkpoi
 ```json
 "u3": {
   "type": "noul",
-  "instructions": "Consider ONLY context unit [3] (assistant+toolResult:bash) in the transcript above. Will ANY future response in this conversation likely need the content of unit [3]? This unit will be PERMANENTLY discarded if you answer no, so answer yes if there is any plausible future need …",
-  "criteria": { "true": "Some future response may need this unit's content — keep it",
-                "false": "No future response will need this unit — safe to permanently discard" }
+  "instructions": "Consider ONLY context unit [3] (assistant+toolResult:bash) in the transcript above. Is this unit likely ESSENTIAL to completing a future response? Keep it only if a later response is likely to directly depend on its unique content. Do not keep it merely because it might be useful; when uncertain, discard …",
+  "criteria": { "true": "This unit is likely essential to a future response — keep it",
+                "false": "This unit is not essential or is uncertain — permanently discard it" }
 }
 ```
 
