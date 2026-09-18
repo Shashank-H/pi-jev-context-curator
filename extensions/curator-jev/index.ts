@@ -2,15 +2,21 @@
  * curator-jev — entry point.
  *
  * A pi extension that curates the context sent to the LLM before each call,
- * using TypeSafe AI's Jev model to decide which context the next response is
- * likely to need.
+ * using TypeSafe AI's Jev model to decide which context any future response
+ * might need.
+ *
+ * Checkpoint model: every unit Jev judges is recorded by content fingerprint.
+ * Each `context` event reuses past judgments and sends only new units (those
+ * after the checkpoint) to Jev, so the same data is never sent twice. A unit
+ * Jev rejects is permanently discarded from what the model sees.
  *
  * Wiring only — the real work lives in the sibling modules:
- *   config.ts    env-based configuration
- *   keystore.ts  API key resolution + persistence
- *   units.ts     message introspection + grouping into units
- *   jev.ts       the Jev decision call
- *   stats.ts     session cost tracking
+ *   config.ts      env-based configuration
+ *   keystore.ts    API key resolution + persistence
+ *   units.ts       message introspection + grouping into units
+ *   checkpoint.ts  content-addressed record of judged units
+ *   jev.ts         the Jev decision call
+ *   stats.ts       session cost + removal tracking
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -21,13 +27,31 @@ import {
 	persistKey,
 	resolveApiKey,
 } from "./keystore.ts";
-import { createStats, formatUsd, recordCall } from "./stats.ts";
-import { describeMessage, estimateTokens, groupIntoUnits } from "./units.ts";
+import {
+	createRemovalStats,
+	createStats,
+	formatStatsSummary,
+	formatTokens,
+	formatUsd,
+	recordCall,
+	recordCuration,
+	recordDiscarded,
+} from "./stats.ts";
+import {
+	describeMessage,
+	estimateTokens,
+	fingerprintUnit,
+	groupIntoUnits,
+	type Unit,
+} from "./units.ts";
+import { JudgmentCheckpoint } from "./checkpoint.ts";
 import { askJev } from "./jev.ts";
 
 export default function curatorJev(pi: ExtensionAPI): void {
 	const cfg = loadConfig();
 	const stats = createStats();
+	const removal = createRemovalStats();
+	const checkpoint = new JudgmentCheckpoint();
 	let enabled = process.env.CURATOR_JEV_ENABLED !== "0";
 	let sessionApiKey: string | undefined;
 	let warnedNoKey = false;
@@ -36,19 +60,31 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		if (cfg.debug) ctx.ui.notify(`[${TAG}] ${msg}`, "info");
 	};
 
+	// Judgments are per-session: a new session starts with a clean checkpoint.
+	pi.on("session_start", () => {
+		checkpoint.clear();
+		const fresh = createRemovalStats();
+		Object.assign(removal, fresh);
+		const freshCost = createStats();
+		Object.assign(stats, freshCost);
+		warnedNoKey = false;
+	});
+
 	const statusLine = (): string => {
 		const { key, source } = resolveApiKey(sessionApiKey);
 		return (
 			`[${TAG}] ${enabled ? "enabled" : "disabled"} | model=${cfg.model} ` +
 			`| threshold=${cfg.threshold} | min-tokens=${cfg.minTokens} ` +
-			`| api-key=${key ? `${maskKey(key)} (${source})` : "MISSING"} | ` +
-			`session cost=${formatUsd(stats.costUsd)} (${stats.calls} calls, ${stats.inputTokens.toLocaleString()} input tokens)`
+			`| api-key=${key ? `${maskKey(key)} (${source})` : "MISSING"} ` +
+			`| judged=${checkpoint.judgedCount} units ` +
+			`| discarded=${removal.messagesRemoved} msgs (~${formatTokens(removal.tokensRemoved)} tokens) ` +
+			`| session cost=${formatUsd(stats.costUsd)}`
 		);
 	};
 
 	pi.registerCommand("curator-jev", {
 		description:
-			"Control the Jev context curator: status | on | off | set-key <key> | clear-key | cost | threshold <0-1> | min-tokens <n>",
+			"Control the Jev context curator: status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n>",
 		handler: async (args, ctx) => {
 			const [subRaw, ...rest] = args.trim().split(/\s+/);
 			const sub = (subRaw || "status").toLowerCase();
@@ -91,6 +127,19 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						"info",
 					);
 					break;
+				case "stats":
+					ctx.ui.notify(formatStatsSummary(stats, removal), "info");
+					break;
+				case "reset": {
+					checkpoint.clear();
+					const fresh = createRemovalStats();
+					Object.assign(removal, fresh);
+					ctx.ui.notify(
+						`[${TAG}] checkpoint cleared — all units will be re-judged from scratch (cost stats untouched)`,
+						"info",
+					);
+					break;
+				}
 				case "threshold": {
 					const n = Number.parseFloat(val);
 					if (!Number.isFinite(n) || n < 0 || n > 1) {
@@ -142,34 +191,98 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		const units = groupIntoUnits(messages);
 		if (units.length <= 1) return;
 
-		// Never drop the latest unit (the current user request).
-		const lastIdx = units.length - 1;
-		units[lastIdx].alwaysKeep = true;
-		const decidable = units.map((_, i) => i).filter((i) => !units[i].alwaysKeep);
-		if (decidable.length === 0) return;
+		// The latest unit is the current request: never judge or drop it now.
+		// It becomes eligible once newer messages arrive.
+		units[units.length - 1].alwaysKeep = true;
 
-		debug(ctx, `curating ${units.length} units (~${estTokens} tokens) via ${cfg.model}…`);
-		const decision = await askJev(units, decidable, apiKey, cfg, ctx.signal);
-		if (!decision) {
-			debug(ctx, "Jev call failed — keeping all context (fail-open)");
+		// Classify against the checkpoint: reuse past judgments, collect
+		// only the new units after the checkpoint for Jev.
+		const keepUnit = new Array<boolean>(units.length).fill(true);
+		const newUnits: { unit: Unit; index: number }[] = [];
+		let reused = 0;
+		for (let i = 0; i < units.length; i++) {
+			const u = units[i];
+			if (u.alwaysKeep) continue;
+			const prior = checkpoint.get(fingerprintUnit(u));
+			if (prior !== undefined) {
+				keepUnit[i] = prior;
+				reused++;
+			} else {
+				newUnits.push({ unit: u, index: i });
+			}
+		}
+
+		let judgedNow = 0;
+		let keptNow = 0;
+		if (newUnits.length > 0) {
+			debug(
+				ctx,
+				`judging ${newUnits.length} new units (${reused} reused from checkpoint) via ${cfg.model}…`,
+			);
+			const decision = await askJev(
+				newUnits.map((n) => n.unit),
+				apiKey,
+				cfg,
+				ctx.signal,
+			);
+			if (!decision) {
+				// Fail open: keep everything this turn, record nothing so the
+				// new units are retried on the next event.
+				debug(ctx, "Jev call failed — keeping all context (fail-open)");
+				return;
+			}
+			const callCost = recordCall(stats, decision.inputTokens);
+
+			let discardedUnits = 0;
+			let discardedMessages = 0;
+			let discardedTokens = 0;
+			for (const local of decision.judged) {
+				const { unit, index } = newUnits[local];
+				const keep = decision.keep.has(local);
+				checkpoint.record(fingerprintUnit(unit), keep);
+				keepUnit[index] = keep;
+				judgedNow++;
+				if (keep) {
+					keptNow++;
+				} else {
+					discardedUnits++;
+					discardedMessages += unit.messageIndexes.length;
+					discardedTokens += estimateTokens(unit.text);
+				}
+			}
+			recordDiscarded(removal, discardedUnits, discardedMessages, discardedTokens);
+			debug(
+				ctx,
+				`judged ${judgedNow} units: kept ${keptNow}, discarded ${discardedUnits} ` +
+					`(cost ${formatUsd(callCost)} this call, ${formatUsd(stats.costUsd)} this session)`,
+			);
+		}
+
+		// Apply removals: drop every message belonging to a discarded unit.
+		const keptIdx = new Set<number>();
+		let removedMessages = 0;
+		let removedTokens = 0;
+		units.forEach((u, ui) => {
+			if (keepUnit[ui]) {
+				u.messageIndexes.forEach((mi) => keptIdx.add(mi));
+			} else {
+				removedMessages += u.messageIndexes.length;
+				removedTokens += estimateTokens(u.text);
+			}
+		});
+		recordCuration(removal, judgedNow, messages.length, estTokens, removedMessages, removedTokens);
+
+		if (removedMessages === 0) {
+			debug(ctx, `no removals: ${messages.length} messages (~${formatTokens(estTokens)} tokens) all kept`);
 			return;
 		}
 
-		const callCost = recordCall(stats, decision.inputTokens);
-
-		const dropped = units.length - decision.keep.size;
-		if (dropped <= 0) {
-			debug(ctx, `kept all ${units.length} units (cost ${formatUsd(callCost)} this call)`);
-			return;
-		}
-
-		const keptMessages = messages.filter((_, mi) =>
-			units.some((u, ui) => decision.keep.has(ui) && u.messageIndexes.includes(mi)),
-		);
+		const keptMessages = messages.filter((_, mi) => keptIdx.has(mi));
 		debug(
 			ctx,
-			`dropped ${dropped}/${units.length} units, kept ${keptMessages.length}/${messages.length} messages ` +
-				`(cost ${formatUsd(callCost)} this call, ${formatUsd(stats.costUsd)} this session)`,
+			`context: ${messages.length} messages (~${formatTokens(estTokens)} tokens) -> ` +
+				`removed ${removedMessages} (~${formatTokens(removedTokens)}), ` +
+				`kept ${keptMessages.length} | discarded total this session: ${removal.messagesRemoved} msgs (~${formatTokens(removal.tokensRemoved)} tokens)`,
 		);
 		return { messages: keptMessages };
 	});
