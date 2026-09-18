@@ -39,7 +39,8 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

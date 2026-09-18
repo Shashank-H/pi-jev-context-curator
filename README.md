@@ -132,9 +132,11 @@ The response's `noul` value is the probability of "yes" — units below threshol
 ## Publishing
 
 Publishing is automated by [`.github/workflows/publish.yml`](.github/workflows/publish.yml)
-when a `v*.*.*` tag is pushed. The tag must match the version in `package.json`.
-The workflow uses npm trusted publishing with provenance; configure the repository as a
-trusted publisher for `pi-jev-context-curator` on npm before the first release.
+when a `v*.*.*` tag is pushed to a commit on `main`. The workflow derives the npm version
+from the tag, installs dependencies, typechecks the TypeScript source, validates the
+package tarball, and publishes with npm trusted publishing and provenance. Configure the
+repository as a trusted publisher for `pi-jev-context-curator` on npm before the first
+release.
 
 ## License
 
