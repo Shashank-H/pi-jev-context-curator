@@ -28,7 +28,15 @@ Because each unit is judged once, the per-turn Jev cost stays tiny (usually 1–
 
 ## Install
 
-As a pi package (auto-discovers `extensions/`):
+As a pi package from npm (auto-discovers `extensions/`):
+
+```bash
+pi install npm:pi-jev-context-curator
+```
+
+The package is also tagged with `pi-package`, so it is eligible for discovery in the [pi package gallery](https://pi.dev/packages).
+
+For development or before an npm release, install directly from GitHub:
 
 ```bash
 pi install git:github.com/Shashank-H/pi-jev-context-curator
@@ -120,6 +128,15 @@ Jev's `/v1/systemone` takes a `state` (the numbered new units after the checkpoi
 ```
 
 The response's `noul` value is the probability of "yes" — units below threshold are dropped.
+
+## Publishing
+
+Publishing is automated by [`.github/workflows/publish.yml`](.github/workflows/publish.yml)
+when a `v*.*.*` tag is pushed to a commit on `main`. The workflow derives the npm version
+from the tag, installs dependencies, typechecks the TypeScript source, validates the
+package tarball, and publishes with npm trusted publishing and provenance. Configure the
+repository as a trusted publisher for `pi-jev-context-curator` on npm before the first
+release.
 
 ## License
 
