@@ -23,6 +23,7 @@ Because each unit is judged once, the per-turn Jev cost stays tiny (usually 1–
 - **System messages are always kept** (they define tools and prompt sections) and are never judged.
 - **The latest unit (current user request) is always kept** for the current turn; it becomes eligible for judgment once newer messages arrive.
 - **Token floor**: curation only runs when estimated context exceeds `CURATOR_JEV_MIN_TOKENS` (default 8000), so small contexts pay no extra latency.
+- **Configurable frequency**: Jev queries run on every context call by default, or every Nth call with `CURATOR_JEV_FREQUENCY` / `/curator-jev frequency <n>`. Previously judged removals are still applied on calls between Jev queries.
 - The Jev call goes over plain `fetch`, not pi's model registry — it never re-triggers `context` handlers, so there's no recursion.
 - The checkpoint is cleared on `session_start`, so judgments never leak across sessions.
 
@@ -69,6 +70,7 @@ modules are imported relatively and are never loaded as extensions themselves.
 | `JEV_MODEL` | `jev-latest` | Jev model alias or pinned version. |
 | `CURATOR_JEV_THRESHOLD` | `0.5` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
 | `CURATOR_JEV_MIN_TOKENS` | `8000` | Only curate above this estimated context size. |
+| `CURATOR_JEV_FREQUENCY` | `1` | Run a new Jev query every Nth context/model call; `3` means every third call. |
 | `CURATOR_JEV_ENABLED` | `1` | Set to `0` to start disabled. |
 | `CURATOR_JEV_DEBUG` | — | Set to `1` for per-turn curation logs. |
 
@@ -96,6 +98,7 @@ Run `/curator-jev clear-key` to remove the key from both the session and the con
 /curator-jev reset              # clear the judgment checkpoint (everything gets re-judged)
 /curator-jev threshold 0.7     # keep only units Jev is ≥70% sure a future response needs
 /curator-jev min-tokens 12000  # raise the token floor
+/curator-jev frequency 3      # query Jev every third context/model call
 ```
 
 ## Removal stats
@@ -112,6 +115,7 @@ Run `/curator-jev clear-key` to remove the key from both the session and the con
 Jev bills **$42 per billion input tokens**; outputs are free. Each curation call is small (the truncated transcript), so a single call typically costs a fraction of a cent. The extension tracks usage from Jev's `usage.input_tokens` response field and shows:
 
 - per-call cost in debug mode (`CURATOR_JEV_DEBUG=1`),
+- a UI notification whenever context is removed, for example `curated context — removed 2,400 tokens (8 messages)`,
 - running session totals in `/curator-jev status` and `/curator-jev cost`.
 
 ## How the decision prompt works

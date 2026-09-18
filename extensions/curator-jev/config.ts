@@ -6,6 +6,7 @@ export const DEFAULT_BASE_URL = "https://api.typesafe.ai";
 export const DEFAULT_MODEL = "jev-latest";
 export const DEFAULT_THRESHOLD = 0.5;
 export const DEFAULT_MIN_TOKENS = 8000;
+export const DEFAULT_FREQUENCY = 1;
 
 /** Keep Jev's `state` comfortably under its 32k token cap. */
 export const MAX_STATE_TOKENS = 28000;
@@ -23,17 +24,21 @@ export interface CuratorConfig {
 	threshold: number;
 	/** Only curate when estimated context tokens exceed this. */
 	minTokens: number;
+	/** Run a new Jev query on every Nth context/model call. */
+	frequency: number;
 	debug: boolean;
 }
 
 export function loadConfig(): CuratorConfig {
 	const threshold = Number.parseFloat(process.env.CURATOR_JEV_THRESHOLD ?? "");
 	const minTokens = Number.parseInt(process.env.CURATOR_JEV_MIN_TOKENS ?? "", 10);
+	const frequency = Number.parseInt(process.env.CURATOR_JEV_FREQUENCY ?? "", 10);
 	return {
 		baseUrl: (process.env.TYPESAFE_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ""),
 		model: process.env.JEV_MODEL || DEFAULT_MODEL,
 		threshold: Number.isFinite(threshold) ? Math.min(1, Math.max(0, threshold)) : DEFAULT_THRESHOLD,
-		minTokens: Number.isFinite(minTokens) ? minTokens : DEFAULT_MIN_TOKENS,
+		minTokens: Number.isFinite(minTokens) && minTokens > 0 ? minTokens : DEFAULT_MIN_TOKENS,
+		frequency: Number.isFinite(frequency) && frequency > 0 ? frequency : DEFAULT_FREQUENCY,
 		debug: process.env.CURATOR_JEV_DEBUG === "1",
 	};
 }
