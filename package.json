@@ -1,0 +1,24 @@
+{
+  "description": "A pi extension that uses TypeSafe AI's Jev model to curate context before each LLM call, keeping only the context the next call is likely to need.",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "name": "pi-jev-context-curator",
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "type": "module",
+  "version": "0.1.0",
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
