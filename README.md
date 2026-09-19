@@ -54,7 +54,9 @@ extensions/curator-jev/
   keystore.ts  API key resolution and persistence (~/.pi/curator-jev.json)
   units.ts     message introspection + grouping into curation units (+ fingerprints)
   checkpoint.ts  content-addressed record of judged units (each unit judged once)
-  jev.ts       the Jev decision call (/v1/systemone)
+  judge.ts     Judge factory — picks the decision backend (jev / classifier)
+  jev.ts       the Jev decision call (/v1/systemone, TypeSafe API backend)
+  classifier.ts  the classifier.dev decision call (keyless backend)
   stats.ts     session cost + removal tracking
 ```
 
@@ -73,8 +75,26 @@ modules are imported relatively and are never loaded as extensions themselves.
 | `CURATOR_JEV_FREQUENCY` | `5` | Run a new Jev query every Nth context/model call; `3` means every third call. |
 | `CURATOR_JEV_ENABLED` | `1` | Set to `0` to start disabled. |
 | `CURATOR_JEV_DEBUG` | — | Set to `1` for per-turn curation logs. |
+| `CURATOR_JEV_JUDGE` | `jev` | Decision backend: `jev` (TypeSafe API, needs a key) or `classifier` ([classifier.dev](https://classifier.dev), keyless). Also switchable at runtime: `/jev-context-curator judge classifier`. |
+| `CURATOR_JEV_CLASSIFIER_TIER` | `fast` | classifier.dev tier: `fast` (Jev, one round trip) or `smart` (re-asks uncertain units with a reasoning model). |
 
-> **Note:** as of September 2026, TypeSafe AI's direct API is in **waitlisted early access** — you need an approved key from `console.typesafe.ai`. Until then the extension passes context through unchanged.
+> **Note:** as of September 2026, TypeSafe AI's direct API is in **waitlisted early access** — you need an approved key from `console.typesafe.ai`. Until then, switch to the keyless judge (`/jev-context-curator judge classifier`) instead of passing context through unchanged.
+
+## Judge backends
+
+The context handler never talks to a decision API directly — it goes through a `Judge` factory (`judge.ts`), so adding a backend is one implementation plus one registry entry. Two ship today:
+
+| | `jev` (default) | `classifier` |
+|---|---|---|
+| Service | TypeSafe AI `/v1/systemone` | [classifier.dev](https://classifier.dev) (itself powered by Jev) |
+| Auth | API key required | none — keyless |
+| Cost | $42/B input tokens | free |
+| How it judges | whole transcript as `state` + one `noul` question per unit | each unit classified `keep`/`discard` independently, with the current request attached as context |
+| Threshold | keep when "needed" probability ≥ threshold | keep when P(keep) ≥ threshold |
+
+Both fail open (any error, rate limit, or undecided answer keeps everything) and both keep on uncertainty — a unit is only discarded on a confident "not needed".
+
+**Privacy note for the classifier backend:** unit text is sent to classifier.dev, which never stores or logs it — it's forwarded to the model provider for the classification only. Limits are generous (3,000 classifications/min, 20,000/day on the fast tier); the extension sends a handful of units per check.
 
 ## API keys
 
@@ -96,9 +116,11 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 /jev-context-curator clear-key         # remove the stored API key
 /jev-context-curator cost              # show Jev spend this session
 /jev-context-curator reset             # clear the judgment checkpoint (everything gets re-judged)
-/jev-context-curator threshold 0.8     # keep only units Jev is ≥80% sure a future response needs
+/jev-context-curator threshold 0.8     # keep only units the judge is ≥80% sure a future response needs
 /jev-context-curator min-tokens 12000  # raise the token floor
-/jev-context-curator frequency 3       # query Jev every third context/model call
+/jev-context-curator frequency 3       # query the judge every third context/model call
+/jev-context-curator judge classifier # use the keyless classifier.dev backend (no API key needed)
+/jev-context-curator judge jev         # back to the TypeSafe API backend
 ```
 
 ## Removal stats
@@ -108,7 +130,7 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 - units judged, and how many were kept vs permanently removed,
 - total messages / estimated tokens discarded,
 - cumulative messages and estimated tokens removed this session,
-- Jev calls, input tokens, and estimated cost.
+- judge calls, input tokens, and estimated cost.
 
 ## Cost
 
