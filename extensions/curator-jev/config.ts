@@ -46,14 +46,29 @@ export interface CuratorConfig {
 	classifierTier: ClassifierTier;
 }
 
+/** Parse CURATOR_JEV_JUDGE; undefined when unset or invalid (caller decides the default). */
+export function parseJudgeBackend(raw: string | undefined): JudgeBackend | undefined {
+	const v = (raw ?? "").toLowerCase();
+	if (v === "classifier") return "classifier";
+	if (v === "jev") return "jev";
+	return undefined;
+}
+
+/** Parse CURATOR_JEV_CLASSIFIER_TIER; undefined when unset or invalid. */
+export function parseClassifierTier(raw: string | undefined): ClassifierTier | undefined {
+	const v = (raw ?? "").toLowerCase();
+	if (v === "fast") return "fast";
+	if (v === "smart") return "smart";
+	return undefined;
+}
+
 export function loadConfig(): CuratorConfig {
 	const threshold = Number.parseFloat(process.env.CURATOR_JEV_THRESHOLD ?? "");
 	const minTokens = Number.parseInt(process.env.CURATOR_JEV_MIN_TOKENS ?? "", 10);
 	const frequency = Number.parseInt(process.env.CURATOR_JEV_FREQUENCY ?? "", 10);
-	const judge: JudgeBackend =
-		(process.env.CURATOR_JEV_JUDGE ?? "").toLowerCase() === "classifier" ? "classifier" : "jev";
+	const judge: JudgeBackend = parseJudgeBackend(process.env.CURATOR_JEV_JUDGE) ?? "jev";
 	const classifierTier: ClassifierTier =
-		(process.env.CURATOR_JEV_CLASSIFIER_TIER ?? "").toLowerCase() === "smart" ? "smart" : "fast";
+		parseClassifierTier(process.env.CURATOR_JEV_CLASSIFIER_TIER) ?? "fast";
 	return {
 		baseUrl: (process.env.TYPESAFE_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ""),
 		model: process.env.JEV_MODEL || DEFAULT_MODEL,

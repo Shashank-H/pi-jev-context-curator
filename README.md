@@ -35,6 +35,13 @@ As a pi package from npm (auto-discovers `extensions/`):
 pi install npm:pi-jev-context-curator
 ```
 
+Then run `/jev-context-curator setup` and pick a judge backend:
+
+- **classifier.dev** — keyless, free, works immediately (recommended).
+- **Jev via TypeSafe API** — setup prompts for your API key (get one at `console.typesafe.ai`; the extension is in waitlisted early access as of September 2026).
+
+Your choice is remembered in `~/.pi/curator-jev.json` (mode 0600, same convention as pi's own `models.json`), so setup survives across sessions. Until setup is done, the extension **fails open** — context passes through untouched, with a one-time nudge to run setup.
+
 The package is also tagged with `pi-package`, so it is eligible for discovery in the [pi package gallery](https://pi.dev/packages).
 
 For development or before an npm release, install directly from GitHub:
@@ -109,6 +116,7 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 ## Commands
 
 ```
+/jev-context-curator setup              # interactive first-run setup: pick a judge backend (prompts for API key if you pick Jev)
 /jev-context-curator status            # show state, settings, key source, checkpoint size, session savings, session cost
 /jev-context-curator stats             # detailed removal + cost stats for the session
 /jev-context-curator on | off          # toggle curation for the session

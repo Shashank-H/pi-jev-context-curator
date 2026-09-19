@@ -20,12 +20,14 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, TAG } from "./config.ts";
+import { loadConfig, parseClassifierTier, parseJudgeBackend, TAG, type JudgeBackend } from "./config.ts";
 import {
 	clearPersistedKey,
+	loadPrefs,
 	maskKey,
 	persistKey,
 	resolveApiKey,
+	savePrefs,
 } from "./keystore.ts";
 import {
 	createRemovalStats,
@@ -49,6 +51,18 @@ import { createJudge } from "./judge.ts";
 
 export default function curatorJev(pi: ExtensionAPI): void {
 	const cfg = loadConfig();
+	// Persisted setup choice (from `setup`/`judge`) fills in what env vars
+	// didn't say; env always wins. Until a backend is chosen at all, the
+	// extension fails open — context passes through untouched.
+	const stored = loadPrefs();
+	const envJudge = parseJudgeBackend(process.env.CURATOR_JEV_JUDGE);
+	if (envJudge) cfg.judge = envJudge;
+	else if (stored.judge) cfg.judge = stored.judge;
+	const envTier = parseClassifierTier(process.env.CURATOR_JEV_CLASSIFIER_TIER);
+	if (envTier) cfg.classifierTier = envTier;
+	else if (stored.classifierTier) cfg.classifierTier = stored.classifierTier;
+	let setupDone = envJudge !== undefined || stored.judge !== undefined;
+	let warnedSetup = false;
 	const stats = createStats();
 	const removal = createRemovalStats();
 	const checkpoint = new JudgmentCheckpoint();
@@ -69,6 +83,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		const freshCost = createStats();
 		Object.assign(stats, freshCost);
 		warnedNoKey = false;
+		warnedSetup = false;
 		contextCalls = 0;
 	});
 
@@ -84,6 +99,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		return [
 			`┌─ ${TAG} ─────────────────────────────`,
 			`│ ${enabled ? "● enabled" : "○ disabled"}   judge: ${judgeLine}`,
+			`│ setup: ${setupDone ? "complete" : "pending — run /jev-context-curator setup"}`,
 			`│ threshold: ${cfg.threshold}   min tokens: ${cfg.minTokens.toLocaleString()}`,
 			`│ judge frequency: every ${cfg.frequency} context call(s)`,
 			`│ API key: ${keyLine}`,
@@ -99,7 +115,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 
 	pi.registerCommand("jev-context-curator", {
 		description:
-			"Control the context pruner: status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n> | judge <jev|classifier>",
+			"Control the context pruner: setup | status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n> | judge <jev|classifier>",
 		handler: async (args, ctx) => {
 			const [subRaw, ...rest] = args.trim().split(/\s+/);
 			const sub = (subRaw || "status").toLowerCase();
@@ -192,10 +208,51 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						break;
 					}
 					cfg.judge = v;
+					savePrefs({ judge: v });
+					setupDone = true;
 					ctx.ui.notify(
 						v === "classifier"
 							? `[${TAG}] judge set to classifier.dev (keyless, free) — no API key needed`
 							: `[${TAG}] judge set to Jev (TypeSafe API) — needs an API key`,
+						"info",
+					);
+					break;
+				}
+				case "setup": {
+					const pick = await ctx.ui.select(
+						"Which judge should curate your context?",
+						[
+							"classifier.dev — keyless, free (recommended)",
+							"Jev via TypeSafe API — needs an API key",
+						],
+						{ timeout: 60_000 },
+					);
+					if (!pick) {
+						ctx.ui.notify(`[${TAG}] setup cancelled`, "info");
+						break;
+					}
+					const backend: JudgeBackend = pick.startsWith("classifier") ? "classifier" : "jev";
+					if (backend === "jev") {
+						const key = await ctx.ui.input("TypeSafe API key", "paste your key from console.typesafe.ai", {
+							timeout: 120_000,
+						});
+						if (!key?.trim()) {
+							ctx.ui.notify(
+								`[${TAG}] setup cancelled — the Jev backend needs an API key`,
+								"warning",
+							);
+							break;
+						}
+						sessionApiKey = key.trim();
+						persistKey(sessionApiKey);
+					}
+					cfg.judge = backend;
+					savePrefs({ judge: backend });
+					setupDone = true;
+					ctx.ui.notify(
+						backend === "classifier"
+							? `[${TAG}] setup complete — judge: classifier.dev (fast tier, keyless, free). Context will be curated from now on.`
+							: `[${TAG}] setup complete — judge: Jev (TypeSafe API). Key saved (${maskKey(sessionApiKey as string)}) to ~/.pi/curator-jev.json. Context will be curated from now on.`,
 						"info",
 					);
 					break;
@@ -209,6 +266,17 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	pi.on("context", async (event, ctx) => {
 		if (!enabled) return;
 		contextCalls++;
+		if (!setupDone) {
+			// Fail open until the user picks a judge: never touch context silently.
+			if (!warnedSetup) {
+				warnedSetup = true;
+				ctx.ui.notify(
+					`[${TAG}] not set up yet — context passes through uncurated. Run /jev-context-curator setup to pick a judge backend.`,
+					"info",
+				);
+			}
+			return;
+		}
 		const judge = createJudge(cfg.judge);
 		let apiKey: string | undefined;
 		if (judge.needsApiKey()) {
@@ -218,7 +286,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				if (!warnedNoKey) {
 					warnedNoKey = true;
 					ctx.ui.notify(
-						`[${TAG}] No TypeSafe API key — context passes through uncurated. Run /jev-context-curator set-key <key>, set TYPESAFE_API_KEY, or switch to the keyless judge: /jev-context-curator judge classifier.`,
+						`[${TAG}] No TypeSafe API key — context passes through uncurated. Run /jev-context-curator setup, /jev-context-curator set-key <key>, or set TYPESAFE_API_KEY.`,
 						"warning",
 					);
 				}

@@ -1,10 +1,14 @@
 /**
- * API key management.
+ * API key + setup preferences.
  *
- * Resolution order:
+ * Resolution order for the key:
  *   1. key set via `/jev-context-curator set-key` (current session only, in memory)
  *   2. `TYPESAFE_API_KEY` environment variable
- *   3. key persisted in `~/.pi/curator-jev.json` by a previous `set-key`
+ *   3. key persisted in `~/.pi/curator-jev.json` by a previous `set-key` or `setup`
+ *
+ * The same file also remembers the judge backend choice from `setup` /
+ * `judge`, so curation keeps working across sessions without re-running setup.
+ * Env vars (`CURATOR_JEV_JUDGE`, `CURATOR_JEV_CLASSIFIER_TIER`) override it.
  *
  * The persisted file is plaintext with mode 0600 — the same convention pi
  * itself uses for `~/.pi/agent/models.json`.
@@ -13,27 +17,40 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ClassifierTier, JudgeBackend } from "./config.ts";
 
 export const CONFIG_FILE = join(homedir(), ".pi", "curator-jev.json");
+
+export interface StoredPrefs {
+	apiKey?: string;
+	judge?: JudgeBackend;
+	classifierTier?: ClassifierTier;
+}
 
 export interface ApiKeyResolution {
 	key: string | undefined;
 	source: string;
 }
 
-export function loadPersistedKey(): string | undefined {
+export function loadPrefs(): StoredPrefs {
 	try {
-		if (!existsSync(CONFIG_FILE)) return undefined;
-		const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as { apiKey?: unknown };
-		return typeof raw.apiKey === "string" && raw.apiKey.length > 0 ? raw.apiKey : undefined;
+		if (!existsSync(CONFIG_FILE)) return {};
+		const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as Record<string, unknown>;
+		const prefs: StoredPrefs = {};
+		if (typeof raw.apiKey === "string" && raw.apiKey.length > 0) prefs.apiKey = raw.apiKey;
+		if (raw.judge === "jev" || raw.judge === "classifier") prefs.judge = raw.judge;
+		if (raw.classifierTier === "fast" || raw.classifierTier === "smart") {
+			prefs.classifierTier = raw.classifierTier;
+		}
+		return prefs;
 	} catch {
-		return undefined;
+		return {};
 	}
 }
 
-export function persistKey(key: string): void {
+function writePrefs(prefs: StoredPrefs): void {
 	mkdirSync(join(homedir(), ".pi"), { recursive: true });
-	writeFileSync(CONFIG_FILE, JSON.stringify({ apiKey: key }, null, 2) + "\n", { mode: 0o600 });
+	writeFileSync(CONFIG_FILE, JSON.stringify(prefs, null, 2) + "\n", { mode: 0o600 });
 	try {
 		chmodSync(CONFIG_FILE, 0o600);
 	} catch {
@@ -41,12 +58,22 @@ export function persistKey(key: string): void {
 	}
 }
 
+/** Merge prefs into the store, preserving everything else (e.g. the API key). */
+export function savePrefs(prefs: StoredPrefs): void {
+	writePrefs({ ...loadPrefs(), ...prefs });
+}
+
+export function loadPersistedKey(): string | undefined {
+	return loadPrefs().apiKey;
+}
+
+export function persistKey(key: string): void {
+	savePrefs({ apiKey: key });
+}
+
 export function clearPersistedKey(): void {
-	try {
-		writeFileSync(CONFIG_FILE, JSON.stringify({}, null, 2) + "\n", { mode: 0o600 });
-	} catch {
-		/* best effort */
-	}
+	const { apiKey: _dropped, ...rest } = loadPrefs();
+	writePrefs(rest);
 }
 
 export function resolveApiKey(sessionKey: string | undefined): ApiKeyResolution {
