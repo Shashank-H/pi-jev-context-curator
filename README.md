@@ -37,7 +37,7 @@ pi install npm:pi-jev-context-curator
 
 Then run `/jev-context-curator setup` and pick a judge backend:
 
-- **classifier.dev** — keyless, free, works immediately (recommended).
+- **classifier.dev** — keyless, free, works immediately.
 - **Jev via TypeSafe API** — setup prompts for your API key (get one at `console.typesafe.ai`; the extension is in waitlisted early access as of September 2026).
 
 Your choice is remembered in `~/.pi/curator-jev.json` (mode 0600, same convention as pi's own `models.json`), so setup survives across sessions. Until setup is done, the extension **fails open** — context passes through untouched, with a one-time nudge to run setup.

@@ -222,7 +222,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					const pick = await ctx.ui.select(
 						"Which judge should curate your context?",
 						[
-							"classifier.dev — keyless, free (recommended)",
+							"classifier.dev — keyless, free",
 							"Jev via TypeSafe API — needs an API key",
 						],
 						{ timeout: 60_000 },
