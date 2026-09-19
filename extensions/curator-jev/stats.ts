@@ -103,7 +103,7 @@ export function recordCuration(
 	r.lastRemovedTokens = removedTokens;
 }
 
-export function formatStatsSummary(cost: SessionStats, r: RemovalStats): string {
+export function formatStatsSummary(cost: SessionStats, r: RemovalStats, backend = "jev"): string {
 	const keptMessages = r.lastTotalMessages - r.lastRemovedMessages;
 	const keptTokens = r.lastTotalTokens - r.lastRemovedTokens;
 	return (
@@ -113,6 +113,6 @@ export function formatStatsSummary(cost: SessionStats, r: RemovalStats): string 
 		`  discarded by new judgments: ${r.messagesRemoved} messages (~${formatTokens(r.tokensRemoved)} tokens)\n` +
 		`  last context: ${r.lastTotalMessages} messages (~${formatTokens(r.lastTotalTokens)} tokens) ` +
 		`-> kept ${keptMessages} (~${formatTokens(keptTokens)})\n` +
-		`  jev: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens, cost ${formatUsd(cost.costUsd)}`
+		`  ${backend}: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens, cost ${formatUsd(cost.costUsd)}`
 	);
 }

@@ -15,17 +15,19 @@
  *   keystore.ts    API key resolution + persistence
  *   units.ts       message introspection + grouping into units
  *   checkpoint.ts  content-addressed record of judged units
- *   jev.ts         the Jev decision call
+ *   judge.ts       Judge factory (jev.ts / classifier.ts backends)
  *   stats.ts       session cost + removal tracking
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, TAG } from "./config.ts";
+import { loadConfig, parseClassifierTier, parseJudgeBackend, TAG, type JudgeBackend } from "./config.ts";
 import {
 	clearPersistedKey,
+	loadPrefs,
 	maskKey,
 	persistKey,
 	resolveApiKey,
+	savePrefs,
 } from "./keystore.ts";
 import {
 	createRemovalStats,
@@ -45,10 +47,22 @@ import {
 	type Unit,
 } from "./units.ts";
 import { JudgmentCheckpoint } from "./checkpoint.ts";
-import { askJev } from "./jev.ts";
+import { createJudge } from "./judge.ts";
 
 export default function curatorJev(pi: ExtensionAPI): void {
 	const cfg = loadConfig();
+	// Persisted setup choice (from `setup`/`judge`) fills in what env vars
+	// didn't say; env always wins. Until a backend is chosen at all, the
+	// extension fails open — context passes through untouched.
+	const stored = loadPrefs();
+	const envJudge = parseJudgeBackend(process.env.CURATOR_JEV_JUDGE);
+	if (envJudge) cfg.judge = envJudge;
+	else if (stored.judge) cfg.judge = stored.judge;
+	const envTier = parseClassifierTier(process.env.CURATOR_JEV_CLASSIFIER_TIER);
+	if (envTier) cfg.classifierTier = envTier;
+	else if (stored.classifierTier) cfg.classifierTier = stored.classifierTier;
+	let setupDone = envJudge !== undefined || stored.judge !== undefined;
+	let warnedSetup = false;
 	const stats = createStats();
 	const removal = createRemovalStats();
 	const checkpoint = new JudgmentCheckpoint();
@@ -69,29 +83,39 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		const freshCost = createStats();
 		Object.assign(stats, freshCost);
 		warnedNoKey = false;
+		warnedSetup = false;
 		contextCalls = 0;
 	});
 
 	const statusText = (): string => {
 		const { key, source } = resolveApiKey(sessionApiKey);
 		const untilNextCheck = cfg.frequency - (contextCalls % cfg.frequency);
+		const judgeLine =
+			cfg.judge === "classifier"
+				? `classifier.dev (${cfg.classifierTier} tier, keyless)`
+				: `jev (${cfg.model})`;
+		const keyLine =
+			cfg.judge === "classifier" ? "n/a — keyless" : key ? `${maskKey(key)} (${source})` : "MISSING";
 		return [
 			`┌─ ${TAG} ─────────────────────────────`,
-			`│ ${enabled ? "● enabled" : "○ disabled"}   model: ${cfg.model}`,
+			`│ ${enabled ? "● enabled" : "○ disabled"}   judge: ${judgeLine}`,
+			`│ setup: ${setupDone ? "complete" : "pending — run /jev-context-curator setup"}`,
 			`│ threshold: ${cfg.threshold}   min tokens: ${cfg.minTokens.toLocaleString()}`,
-			`│ Jev frequency: every ${cfg.frequency} context call(s)`,
-			`│ API key: ${key ? `${maskKey(key)} (${source})` : "MISSING"}`,
+			`│ judge frequency: every ${cfg.frequency} context call(s)`,
+			`│ API key: ${keyLine}`,
 			`│ judged: ${checkpoint.judgedCount} units   context calls: ${contextCalls}`,
-			`│ Jev calls: ${stats.calls}   next check: in ${untilNextCheck} context call(s)`,
+			`│ judge calls: ${stats.calls}   next check: in ${untilNextCheck} context call(s)`,
 			`│ cumulative removed: ${removal.sessionSavedMessages} messages (~${formatTokens(removal.sessionSavedTokens)} tokens)`,
 			`│ session cost: ${formatUsd(stats.costUsd)}`,
 			"└────────────────────────────────────",
 		].join("\n");
 	};
 
+	const backendName = (): string => (cfg.judge === "classifier" ? "classifier.dev" : "Jev");
+
 	pi.registerCommand("jev-context-curator", {
 		description:
-			"Control the context pruner: status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n>",
+			"Control the context pruner: setup | status | stats | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n> | judge <jev|classifier>",
 		handler: async (args, ctx) => {
 			const [subRaw, ...rest] = args.trim().split(/\s+/);
 			const sub = (subRaw || "status").toLowerCase();
@@ -127,7 +151,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				}
 				case "cost":
 					ctx.ui.notify(
-						`[${TAG}] this session: ${stats.calls} Jev calls, ` +
+						`[${TAG}] this session: ${stats.calls} ${backendName()} calls, ` +
 							`${stats.inputTokens.toLocaleString()} input tokens, ` +
 							`estimated cost ${formatUsd(stats.costUsd)} ` +
 							`(last call: ${formatUsd(stats.lastCallCostUsd)} over ${stats.lastCallTokens.toLocaleString()} tokens)`,
@@ -135,7 +159,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					);
 					break;
 				case "stats":
-					ctx.ui.notify(formatStatsSummary(stats, removal), "info");
+					ctx.ui.notify(formatStatsSummary(stats, removal, backendName()), "info");
 					break;
 				case "reset": {
 					checkpoint.clear();
@@ -174,7 +198,63 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						break;
 					}
 					cfg.frequency = n;
-					ctx.ui.notify(`[${TAG}] Jev queries now run every ${n} context calls`, "info");
+					ctx.ui.notify(`[${TAG}] judge queries now run every ${n} context calls`, "info");
+					break;
+				}
+				case "judge": {
+					const v = val.toLowerCase();
+					if (v !== "jev" && v !== "classifier") {
+						ctx.ui.notify(`[${TAG}] usage: /jev-context-curator judge <jev|classifier>`, "warning");
+						break;
+					}
+					cfg.judge = v;
+					savePrefs({ judge: v });
+					setupDone = true;
+					ctx.ui.notify(
+						v === "classifier"
+							? `[${TAG}] judge set to classifier.dev (keyless, free) — no API key needed`
+							: `[${TAG}] judge set to Jev (TypeSafe API) — needs an API key`,
+						"info",
+					);
+					break;
+				}
+				case "setup": {
+					const pick = await ctx.ui.select(
+						"Which judge should curate your context?",
+						[
+							"classifier.dev — keyless, free",
+							"Jev via TypeSafe API — needs an API key",
+						],
+						{ timeout: 60_000 },
+					);
+					if (!pick) {
+						ctx.ui.notify(`[${TAG}] setup cancelled`, "info");
+						break;
+					}
+					const backend: JudgeBackend = pick.startsWith("classifier") ? "classifier" : "jev";
+					if (backend === "jev") {
+						const key = await ctx.ui.input("TypeSafe API key", "paste your key from console.typesafe.ai", {
+							timeout: 120_000,
+						});
+						if (!key?.trim()) {
+							ctx.ui.notify(
+								`[${TAG}] setup cancelled — the Jev backend needs an API key`,
+								"warning",
+							);
+							break;
+						}
+						sessionApiKey = key.trim();
+						persistKey(sessionApiKey);
+					}
+					cfg.judge = backend;
+					savePrefs({ judge: backend });
+					setupDone = true;
+					ctx.ui.notify(
+						backend === "classifier"
+							? `[${TAG}] setup complete — judge: classifier.dev (fast tier, keyless, free). Context will be curated from now on.`
+							: `[${TAG}] setup complete — judge: Jev (TypeSafe API). Key saved (${maskKey(sessionApiKey as string)}) to ~/.pi/curator-jev.json. Context will be curated from now on.`,
+						"info",
+					);
 					break;
 				}
 				default:
@@ -186,16 +266,32 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	pi.on("context", async (event, ctx) => {
 		if (!enabled) return;
 		contextCalls++;
-		const { key: apiKey } = resolveApiKey(sessionApiKey);
-		if (!apiKey) {
-			if (!warnedNoKey) {
-				warnedNoKey = true;
+		if (!setupDone) {
+			// Fail open until the user picks a judge: never touch context silently.
+			if (!warnedSetup) {
+				warnedSetup = true;
 				ctx.ui.notify(
-					`[${TAG}] No TypeSafe API key — context passes through uncurated. Run /jev-context-curator set-key <key> or set TYPESAFE_API_KEY.`,
-					"warning",
+					`[${TAG}] not set up yet — context passes through uncurated. Run /jev-context-curator setup to pick a judge backend.`,
+					"info",
 				);
 			}
 			return;
+		}
+		const judge = createJudge(cfg.judge);
+		let apiKey: string | undefined;
+		if (judge.needsApiKey()) {
+			const resolved = resolveApiKey(sessionApiKey);
+			apiKey = resolved.key;
+			if (!apiKey) {
+				if (!warnedNoKey) {
+					warnedNoKey = true;
+					ctx.ui.notify(
+						`[${TAG}] No TypeSafe API key — context passes through uncurated. Run /jev-context-curator setup, /jev-context-curator set-key <key>, or set TYPESAFE_API_KEY.`,
+						"warning",
+					);
+				}
+				return;
+			}
 		}
 
 		const messages = event.messages;
@@ -214,7 +310,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		units[units.length - 1].alwaysKeep = true;
 
 		// Classify against the checkpoint: reuse past judgments, collect
-		// only the new units after the checkpoint for Jev.
+		// only the new units after the checkpoint for the judge.
 		const keepUnit = new Array<boolean>(units.length).fill(true);
 		const newUnits: { unit: Unit; index: number }[] = [];
 		let reused = 0;
@@ -236,18 +332,21 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		if (newUnits.length > 0 && queryDue) {
 			debug(
 				ctx,
-				`judging ${newUnits.length} new units (${reused} reused from checkpoint) via ${cfg.model}…`,
+				`judging ${newUnits.length} new units (${reused} reused from checkpoint) via ${judge.displayName(cfg)}…`,
 			);
-			const decision = await askJev(
-				newUnits.map((n) => n.unit),
-				apiKey,
+			const decision = await judge.ask(
+				{
+					units: newUnits.map((n) => n.unit),
+					anchorText: units[units.length - 1].text,
+					apiKey,
+				},
 				cfg,
 				ctx.signal,
 			);
 			if (!decision) {
 				// Fail open: keep everything this turn, record nothing so the
 				// new units are retried on the next event.
-				debug(ctx, "Jev call failed — keeping all context (fail-open)");
+				debug(ctx, `${backendName()} call failed — keeping all context (fail-open)`);
 				return;
 			}
 			const callCost = recordCall(stats, decision.inputTokens);
@@ -276,7 +375,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					`(cost ${formatUsd(callCost)} this call, ${formatUsd(stats.costUsd)} this session)`,
 			);
 		} else if (newUnits.length > 0 && !queryDue) {
-			debug(ctx, `skipping Jev query on context call ${contextCalls} (frequency 1/${cfg.frequency})`);
+			debug(ctx, `skipping judge query on context call ${contextCalls} (frequency 1/${cfg.frequency})`);
 		}
 
 		// Apply removals: drop every message belonging to a discarded unit.
