@@ -10,6 +10,7 @@ Before every LLM call, pi fires the `context` event with the full message list. 
 2. Checks each unit against the **judgment checkpoint**: every unit Jev has already judged is recorded by content fingerprint, so past decisions are reused and the same data is never sent to Jev twice.
 3. Sends only the **new units** (those after the checkpoint) to Jev's `/v1/systemone` endpoint with **one yes/no (`noul`) question per unit**: *"Is this unit likely essential to completing a future response?"* The prompt prefers minimal retention and all questions evaluate in parallel in a single pass.
 4. Units Jev rejects are **permanently discarded** from what the model sees — the removal is re-applied on every subsequent `context` event (pi itself only lets extensions transform the per-call payload, not edit the stored session).
+5. Every newly removed unit is also written as a durable, session-scoped pi entry. It appears in the transcript as a collapsed `[jev removed]` record and can be expanded to inspect the removed text; this record is display-only and is not sent back to the LLM.
 
 Jev is a good fit here: it returns calibrated probabilities in ~70–500ms, costs $42/B input tokens with free outputs, and is purpose-built for this kind of structured semantic judgment.
 
@@ -56,6 +57,7 @@ extensions/curator-jev/
   checkpoint.ts  content-addressed record of judged units (each unit judged once)
   jev.ts       the Jev decision call (/v1/systemone)
   stats.ts     session cost + removal tracking
+  removed-context.ts  session-scoped removed-unit index
 ```
 
 pi discovers the extension via `extensions/curator-jev/index.ts`; the other
@@ -91,6 +93,7 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 ```
 /jev-context-curator status            # show state, settings, key source, checkpoint size, session savings, session cost
 /jev-context-curator stats             # detailed removal + cost stats for the session
+/jev-context-curator removed           # list removed units captured during this runtime
 /jev-context-curator on | off          # toggle curation for the session
 /jev-context-curator set-key <key>     # add your TypeSafe API key (persisted to ~/.pi/curator-jev.json)
 /jev-context-curator clear-key         # remove the stored API key
@@ -109,6 +112,12 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 - total messages / estimated tokens discarded,
 - cumulative messages and estimated tokens removed this session,
 - Jev calls, input tokens, and estimated cost.
+
+Removed context is stored per pi session as durable extension entries. In the TUI,
+expand each `[jev removed]` entry in the transcript to view its full text. The
+`removed` command provides a text summary of entries captured since the extension
+was loaded. Removed entries are intentionally display-only and are never included
+in future model context.
 
 ## Cost
 
