@@ -49,6 +49,7 @@ import { JudgmentCheckpoint } from "./checkpoint.ts";
 import { askJev } from "./jev.ts";
 import { RemovedContextStore } from "./removed-context.ts";
 import { RemovedContextDialog } from "./removed-context-dialog.ts";
+import { collectCacheMetrics } from "./cache-graph.ts";
 
 export default function curatorJev(pi: ExtensionAPI): void {
 	const cfg = loadConfig();
@@ -165,7 +166,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					}
 					await ctx.ui.custom(
 						(tui, theme, _keybindings, done) =>
-							new RemovedContextDialog(theme, entries, () => done(null)),
+							new RemovedContextDialog(theme, entries, collectCacheMetrics(ctx.sessionManager.getEntries()), () => done(null)),
 						{
 							overlay: true,
 							overlayOptions: {
