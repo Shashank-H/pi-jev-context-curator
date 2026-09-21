@@ -67,15 +67,15 @@ export class RemovedContextDialog implements Component {
 		for (let i = 0; i < DEFAULT_BODY_ROWS; i++) lines.push(`${border} ${fitLine(visible[i] ?? "", innerWidth - 2)} ${border}`);
 		const position = `${this.scrollOffset + 1}-${Math.min(this.scrollOffset + DEFAULT_BODY_ROWS, bodyLines.length)} of ${bodyLines.length}`;
 		const cacheHelp = this.tab === "cache" ? " • v cycle chart" : "";
-		lines.push(`${border}${fitLine(this.theme.fg("dim", `1/2 tabs${cacheHelp} • ↑/↓ scroll • PgUp/PgDn • q/Esc close   ${position}`), innerWidth)}${border}`);
+		lines.push(`${border}${fitLine(this.theme.fg("dim", `←/→ or 1/2 tabs${cacheHelp} • ↑/↓ scroll • PgUp/PgDn • q/Esc close   ${position}`), innerWidth)}${border}`);
 		lines.push(this.theme.fg("border", `╰${"─".repeat(innerWidth)}╯`));
 		return lines;
 	}
 
 	handleInput(data: string): void {
 		if (matchesKey(data, Key.escape) || data === "q") return this.onClose();
-		if (data === "1" || data === "2") {
-			this.tab = data === "1" ? "removed" : "cache";
+		if (data === "1" || data === "2" || matchesKey(data, Key.left) || matchesKey(data, Key.right)) {
+			this.tab = data === "1" || matchesKey(data, Key.left) ? "removed" : "cache";
 			this.scrollOffset = 0;
 			this.invalidate();
 			return;
