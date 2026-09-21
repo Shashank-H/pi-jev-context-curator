@@ -48,6 +48,7 @@ import {
 import { JudgmentCheckpoint } from "./checkpoint.ts";
 import { askJev } from "./jev.ts";
 import { RemovedContextStore } from "./removed-context.ts";
+import { RemovedContextDialog } from "./removed-context-dialog.ts";
 
 export default function curatorJev(pi: ExtensionAPI): void {
 	const cfg = loadConfig();
@@ -162,13 +163,19 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						ctx.ui.notify(`[${TAG}] no context has been removed in this session`, "info");
 						break;
 					}
-					const output = entries
-						.map((entry, i) =>
-							`[${i + 1}] ${entry.label} — ${entry.messageCount} message(s), ~${formatTokens(entry.tokens)} tokens\n` +
-								entry.text,
-						)
-						.join("\n\n");
-					ctx.ui.notify(`[${TAG}] removed context (${entries.length} unit(s))\n\n${output}`, "info");
+					await ctx.ui.custom(
+						(tui, theme, _keybindings, done) =>
+							new RemovedContextDialog(theme, entries, () => done(null)),
+						{
+							overlay: true,
+							overlayOptions: {
+								width: "90%",
+								maxHeight: "85%",
+								anchor: "center",
+								margin: 1,
+							},
+						},
+					);
 					break;
 				}
 				case "reset": {
