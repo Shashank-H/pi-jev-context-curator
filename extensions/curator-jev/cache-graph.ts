@@ -70,9 +70,11 @@ function horizontalPercentGraph(
 	});
 	const labels = values.map(({ sequence }) => String(sequence).padStart(2, " ")).join(" ");
 	return [
+		`${dim("% hit ↑")}`,
 		...rows,
-		`${dim("    ")} └${"─".repeat(Math.max(1, labels.length + 1))}`,
-		`${dim("    ")}  ${labels}`,
+		`${dim("      ")} └${"─".repeat(Math.max(1, labels.length + 1))}`,
+		`${dim("      ")}  ${labels}`,
+		`${dim("      ")}  turns →`,
 	];
 }
 
