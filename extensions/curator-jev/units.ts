@@ -101,7 +101,11 @@ function makeUnit(messages: AgentMessage[], indexes: number[]): Unit {
 	const label = described.map((d) => d.label).join("+");
 	const text = described.map((d) => d.text).join("\n---\n");
 	const hasSystem = indexes.some((i) => roleOf(messages[i]) === "system");
-	return { messageIndexes: indexes, label, text, alwaysKeep: hasSystem };
+	// User turns must survive curation. Strict providers reject a request with
+	// no user message (zhipu GLM returns 400 code 1214), and dropping the
+	// current instruction makes the model answer something else entirely.
+	const hasUser = indexes.some((i) => roleOf(messages[i]) === "user");
+	return { messageIndexes: indexes, label, text, alwaysKeep: hasSystem || hasUser };
 }
 
 export function groupIntoUnits(messages: AgentMessage[]): Unit[] {
