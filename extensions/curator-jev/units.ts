@@ -14,7 +14,7 @@ export interface Unit {
 	messageIndexes: number[];
 	label: string;
 	text: string;
-	/** Units that must never be dropped (system messages; set for the latest unit by the caller). */
+	/** Units that must never be dropped (system/summary messages; set for the latest unit by the caller). */
 	alwaysKeep: boolean;
 }
 
@@ -80,6 +80,10 @@ export function describeMessage(m: AgentMessage): { label: string; text: string 
 		const prefix = `[tool result: ${msg.toolName ?? "unknown"}${msg.isError ? " (errored)" : ""}]`;
 		return { label: `toolResult:${msg.toolName ?? "?"}`, text: `${prefix}\n${textOf(msg.content)}` };
 	}
+	if (role === "compactionSummary" || role === "branchSummary") {
+		const summary = (m as { summary?: unknown }).summary;
+		return { label: role, text: typeof summary === "string" ? summary : "" };
+	}
 	return { label: role, text: textOf((m as { content?: unknown }).content) || JSON.stringify(m).slice(0, 500) };
 }
 
@@ -100,8 +104,10 @@ function makeUnit(messages: AgentMessage[], indexes: number[]): Unit {
 	const described = indexes.map((i) => describeMessage(messages[i]));
 	const label = described.map((d) => d.label).join("+");
 	const text = described.map((d) => d.text).join("\n---\n");
-	const hasSystem = indexes.some((i) => roleOf(messages[i]) === "system");
-	return { messageIndexes: indexes, label, text, alwaysKeep: hasSystem };
+	// Summary preservation is stated in Jev's decision prompt so the model can
+	// classify summary-shaped units consistently with the rest of the policy.
+	const alwaysKeep = indexes.some((i) => roleOf(messages[i]) === "system");
+	return { messageIndexes: indexes, label, text, alwaysKeep };
 }
 
 export function groupIntoUnits(messages: AgentMessage[]): Unit[] {

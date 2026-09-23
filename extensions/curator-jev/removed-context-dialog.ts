@@ -37,7 +37,9 @@ export class RemovedContextDialog implements Component {
 			lines = renderCacheGraph(this.cacheMetrics, width, (s) => this.theme.fg("accent", s), (s) => this.theme.fg("dim", s), this.cacheView);
 		} else {
 			lines = [];
-			for (const [index, entry] of this.entries.entries()) {
+			// Show the newest removal first so the list answers "what changed?"
+			// immediately without scrolling past older entries.
+			for (const [index, entry] of [...this.entries].reverse().entries()) {
 				lines.push(this.theme.fg("accent", `${index + 1}. ${entry.label}`));
 				lines.push(this.theme.fg("dim", `   ${entry.messageCount} message(s) • ~${formatTokens(entry.tokens)} tokens`));
 				for (const sourceLine of entry.text.split("\n")) lines.push(...wrapTextWithAnsi(sourceLine || " ", width));

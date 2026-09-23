@@ -53,6 +53,29 @@ function viewLabel(view: CacheGraphView): string {
 	return view === "per-turn" ? "Per-turn (%)" : view === "cumulative-percent" ? "Cumulative (%)" : "Cumulative (total)";
 }
 
+/**
+ * Plot turns left-to-right, like the cache graph used by the reference
+ * implementation. Each column is one assistant turn; the y-axis is hit rate.
+ */
+function horizontalPercentGraph(
+	values: readonly { sequence: number; percent: number }[],
+	color: (s: string) => string,
+	dim: (s: string) => string,
+): string[] {
+	const levels = [100, 75, 50, 25, 0];
+	const axis = values.map(({ percent }) => Math.max(0, Math.min(100, percent)));
+	const rows = levels.map((level) => {
+		const marks = axis.map((percent) => percent >= level ? "█" : "·").join(" ");
+		return `${dim(`${String(level).padStart(3)}%`)} │ ${color(marks)}`;
+	});
+	const labels = values.map(({ sequence }) => String(sequence).padStart(2, " ")).join(" ");
+	return [
+		...rows,
+		`${dim("    ")} └${"─".repeat(Math.max(1, labels.length + 1))}`,
+		`${dim("    ")}  ${labels}`,
+	];
+}
+
 /** Render the same three cache views exposed by pi-cache-graph. */
 export function renderCacheGraph(
 	metrics: readonly CacheHitMetric[],
@@ -74,16 +97,20 @@ export function renderCacheGraph(
 	];
 	const visible = metrics.slice(-Math.max(4, Math.min(18, (process.stdout.rows ?? 30) - 15)));
 	if (view === "per-turn") {
-		lines.push(color("Per-turn cache hit %"));
-		for (const metric of visible) lines.push(`${String(metric.sequence).padStart(3)}  ${metric.hitPercent.toFixed(1).padStart(5)}% ${color(bar(metric.hitPercent, 100, graphWidth))}`);
+		lines.push(color("Per-turn cache hit % (turns →)"));
+		lines.push(...horizontalPercentGraph(
+			visible.map((metric) => ({ sequence: metric.sequence, percent: metric.hitPercent })),
+			color,
+			dim,
+		));
 	} else if (view === "cumulative-percent") {
-		lines.push(color("Running aggregate cache hit %"));
+		lines.push(color("Running aggregate cache hit % (turns →)"));
 		let running = { input: 0, cacheRead: 0, cacheWrite: 0 };
-		for (const metric of visible) {
+		const values = visible.map((metric) => {
 			running = { input: running.input + metric.input, cacheRead: running.cacheRead + metric.cacheRead, cacheWrite: running.cacheWrite + metric.cacheWrite };
-			const percent = cacheHitPercent(running.input, running.cacheRead, running.cacheWrite);
-			lines.push(`${String(metric.sequence).padStart(3)}  ${percent.toFixed(1).padStart(5)}% ${color(bar(percent, 100, graphWidth))}`);
-		}
+			return { sequence: metric.sequence, percent: cacheHitPercent(running.input, running.cacheRead, running.cacheWrite) };
+		});
+		lines.push(...horizontalPercentGraph(values, color, dim));
 	} else {
 		lines.push(color("Running cumulative token volumes"));
 		const cumulative = { input: 0, cacheRead: 0, cacheWrite: 0 };

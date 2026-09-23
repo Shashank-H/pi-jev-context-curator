@@ -2,10 +2,9 @@
  * The Jev decision call: one `/v1/systemone` request with a yes/no ("noul")
  * question per new context unit.
  *
- * The question is framed for permanent removal: "will ANY future response in
- * this conversation need this unit?" A "no" means the unit is discarded for
- * good, so the bar for answering no is high and the safe direction on
- * uncertainty is to keep.
+ * The question is framed conservatively: "could ANY future response in this
+ * conversation benefit from this unit?" A "no" permits removal only when the
+ * unit is clearly disposable; the safe direction on uncertainty is to keep.
  *
  * Only units after the checkpoint are sent: Jev never sees the same unit
  * twice. Uses plain `fetch` (not pi's model registry) so it never
@@ -82,15 +81,17 @@ export async function askJev(
 			type: "noul",
 			instructions:
 				`Consider ONLY context unit [${i}] (${newUnits[i].label}) in the transcript above. ` +
-				`Is this context unit likely ESSENTIAL to completing a future response in this conversation? ` +
-				`Keep it only if a later response is likely to directly depend on its unique instructions, facts, ` +
-				`file contents, code, or tool results. Do NOT keep it merely because it provides background, ` +
-				`might be useful, or could possibly become relevant. Prefer discarding transient reasoning, ` +
-				`intermediate tool output, already-summarized information, and redundant context. ` +
-				`When uncertain, answer no.`,
+				`Would any future response in this conversation benefit from having this unit available? ` +
+				`Keep instructions, facts, file contents, code, tool results, useful background, and anything ` +
+				`that may help answer a later question. Summary units (including compaction summaries, ` +
+				`branch summaries, and summaries created earlier in the session) are durable context: keep them. ` +
+				`Keep a unit when it might reasonably become relevant or when you are uncertain. Only answer ` +
+				`no for content that is clearly disposable, such as duplicate or purely transient material with ` +
+				`no likely future value. This is a preference for preservation, not a test of whether the unit ` +
+				`is strictly essential.`,
 			criteria: {
-				true: "This unit is likely essential to a future response — keep it",
-				false: "This unit is not essential or is uncertain — permanently discard it",
+				true: "This unit may be useful to a future response — keep it",
+				false: "This unit is clearly disposable and has no likely future value — discard it; summaries are not disposable",
 			},
 		};
 	}

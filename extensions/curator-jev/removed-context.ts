@@ -20,6 +20,11 @@ export class RemovedContextStore {
 		return stored;
 	}
 
+	/** Restore a previously persisted entry when resuming this session. */
+	restore(entry: RemovedContextEntry): void {
+		if (!this.entries.has(entry.fingerprint)) this.entries.set(entry.fingerprint, entry);
+	}
+
 	clear(): void {
 		this.entries.clear();
 	}

@@ -8,8 +8,8 @@ Before every LLM call, pi fires the `context` event with the full message list. 
 
 1. Groups messages into **units** — an assistant tool-call message plus its tool results stay together as one atomic unit, so curation never orphans a tool result.
 2. Checks each unit against the **judgment checkpoint**: every unit Jev has already judged is recorded by content fingerprint, so past decisions are reused and the same data is never sent to Jev twice.
-3. Sends only the **new units** (those after the checkpoint) to Jev's `/v1/systemone` endpoint with **one yes/no (`noul`) question per unit**: *"Is this unit likely essential to completing a future response?"* The prompt prefers minimal retention and all questions evaluate in parallel in a single pass.
-4. Units Jev rejects are **permanently discarded** from what the model sees — the removal is re-applied on every subsequent `context` event (pi itself only lets extensions transform the per-call payload, not edit the stored session).
+3. Sends only the **new units** (those after the checkpoint) to Jev's `/v1/systemone` endpoint with **one yes/no (`noul`) question per unit**: *"Could this help a future response?"* The prompt favors preservation; summaries are explicitly treated as durable context.
+4. Units Jev rejects are omitted from the current model context and that decision is re-applied on subsequent `context` events (pi itself only lets extensions transform the per-call payload, not edit the stored session).
 5. Every newly removed unit is also written as a durable, session-scoped pi entry. It appears in the transcript as a collapsed `[jev removed]` record and can be expanded to inspect the removed text; this record is display-only and is not sent back to the LLM.
 
 Jev is a good fit here: it returns calibrated probabilities in ~70–500ms, costs $42/B input tokens with free outputs, and is purpose-built for this kind of structured semantic judgment.
@@ -20,7 +20,7 @@ Because each unit is judged once, the per-turn Jev cost stays tiny (usually 1–
 
 - **No API key** → context passes through untouched (one warning per session).
 - **Any Jev API error / timeout / rate-limit** → context passes through untouched, and the new units are retried on the next event (nothing is recorded).
-- **A "no" requires confidence**: the question is framed for permanent removal, so on uncertainty Jev should answer yes; non-numeric/missing answers are always kept.
+- **A "no" requires confidence**: on uncertainty Jev should answer yes. Summary units—including summaries created earlier—are explicitly kept; non-numeric/missing answers are also kept.
 - **System messages are always kept** (they define tools and prompt sections) and are never judged.
 - **The latest unit (current user request) is always kept** for the current turn; it becomes eligible for judgment once newer messages arrive.
 - **Token floor**: curation only runs when estimated context exceeds `CURATOR_JEV_MIN_TOKENS` (default 8000), so small contexts pay no extra latency.
@@ -70,7 +70,7 @@ modules are imported relatively and are never loaded as extensions themselves.
 | `TYPESAFE_API_KEY` | — | API key from `console.typesafe.ai/settings/keys`. One of the key sources is required; without it the extension is a no-op. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Override for proxies/mirrors. |
 | `JEV_MODEL` | `jev-latest` | Jev model alias or pinned version. |
-| `CURATOR_JEV_THRESHOLD` | `0.5` | Keep a unit when Jev's "needed" probability ≥ this. Higher = more aggressive pruning. |
+| `CURATOR_JEV_THRESHOLD` | `0.25` | Keep a unit when Jev's "needed" probability ≥ this. Lower is more conservative and keeps more context. |
 | `CURATOR_JEV_MIN_TOKENS` | `8000` | Only curate above this estimated context size. |
 | `CURATOR_JEV_FREQUENCY` | `5` | Run a new Jev query every Nth context/model call; `3` means every third call. |
 | `CURATOR_JEV_ENABLED` | `1` | Set to `0` to start disabled. |
@@ -134,9 +134,9 @@ Jev's `/v1/systemone` takes a `state` (the numbered new units after the checkpoi
 ```json
 "u3": {
   "type": "noul",
-  "instructions": "Consider ONLY context unit [3] (assistant+toolResult:bash) in the transcript above. Is this unit likely ESSENTIAL to completing a future response? Keep it only if a later response is likely to directly depend on its unique content. Do not keep it merely because it might be useful; when uncertain, discard …",
-  "criteria": { "true": "This unit is likely essential to a future response — keep it",
-                "false": "This unit is not essential or is uncertain — permanently discard it" }
+  "instructions": "Consider ONLY context unit [3] (assistant+toolResult:bash) in the transcript above. Could this help any future response? Keep useful context, and always keep compaction, branch, or previously-created summary units. Only answer no for clearly disposable content; when uncertain, keep it …",
+  "criteria": { "true": "This unit may help a future response — keep it",
+                "false": "This unit is clearly disposable; summaries are not disposable" }
 }
 ```
 

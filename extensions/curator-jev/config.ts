@@ -4,7 +4,9 @@ export const TAG = "jev-context-curator";
 
 export const DEFAULT_BASE_URL = "https://api.typesafe.ai";
 export const DEFAULT_MODEL = "jev-latest";
-export const DEFAULT_THRESHOLD = 0.5;
+// Conservative default: preserve useful context unless Jev is fairly confident
+// that it is clearly disposable.
+export const DEFAULT_THRESHOLD = 0.25;
 export const DEFAULT_MIN_TOKENS = 8000;
 export const DEFAULT_FREQUENCY = 5;
 
