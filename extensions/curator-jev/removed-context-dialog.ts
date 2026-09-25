@@ -42,6 +42,7 @@ export class RemovedContextDialog implements Component {
 			for (const [index, entry] of [...this.entries].reverse().entries()) {
 				lines.push(this.theme.fg("accent", `${index + 1}. ${entry.label}`));
 				lines.push(this.theme.fg("dim", `   ${entry.messageCount} message(s) • ~${formatTokens(entry.tokens)} tokens`));
+				lines.push(this.theme.fg("dim", `   Reason: ${entry.reason ?? "No clear reason identified"}`));
 				for (const sourceLine of entry.text.split("\n")) lines.push(...wrapTextWithAnsi(sourceLine || " ", width));
 				if (index < this.entries.length - 1) lines.push("");
 			}

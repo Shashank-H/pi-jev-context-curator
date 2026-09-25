@@ -2,9 +2,9 @@
  * The Jev decision call: one `/v1/systemone` request with a yes/no ("noul")
  * question per new context unit.
  *
- * The question is framed conservatively: "could ANY future response in this
- * conversation benefit from this unit?" A "no" permits removal only when the
- * unit is clearly disposable; the safe direction on uncertainty is to keep.
+ * The question asks whether this unit should be kept, with a bounded list of
+ * concrete removal reasons to make Jev more decisive without discarding
+ * durable context. A removal must match a reason; uncertainty still means keep.
  *
  * Only units after the checkpoint are sent: Jev never sees the same unit
  * twice. Uses plain `fetch` (not pi's model registry) so it never
@@ -20,14 +20,34 @@ import {
 import { estimateTokens, type Unit } from "./units.ts";
 
 interface JevQuestion {
-	type: "noul";
+	type: "noul" | "choice";
 	instructions: string;
-	criteria?: { true: string; false: string };
+	criteria: Record<string, string>;
 }
+
+const KEEP_REASONS = [
+	{ id: "instruction", label: "User instruction, preference, or constraint", description: "It records what the user asked for or how they want the work done." },
+	{ id: "fact", label: "Unique fact, code, or useful result", description: "It contains information not safely recoverable from retained context." },
+	{ id: "open-work", label: "Open task or unresolved question", description: "It is needed to continue unfinished work or answer an open question." },
+	{ id: "summary", label: "Summary or durable context", description: "It summarizes prior work or preserves durable conversation context." },
+	{ id: "future-use", label: "Plausibly useful later", description: "It may reasonably help a future response, or uncertainty favors keeping it." },
+] as const;
+
+const REMOVAL_REASONS = [
+	{ id: "duplicate", label: "Duplicate of retained context", description: "The same information is already retained." },
+	{ id: "superseded", label: "Superseded by newer information", description: "A newer complete correction or result replaces this unit." },
+	{ id: "transient", label: "Transient chatter or coordination", description: "Acknowledgement, small talk, or coordination with no lasting preference or commitment." },
+	{ id: "intermediate", label: "Redundant intermediate output", description: "Retry noise, routine progress, or verbose intermediate tool output whose useful result is already retained." },
+	{ id: "completed", label: "Completed-task detail with no reusable value", description: "A completed-task detail containing no reusable fact, decision, instruction, code, or result." },
+] as const;
+
+type KeepReason = (typeof KEEP_REASONS)[number]["label"];
+type RemovalReason = (typeof REMOVAL_REASONS)[number]["label"];
+export type DecisionReason = KeepReason | RemovalReason | "No clear reason identified";
 
 interface JevResponse {
 	model?: string;
-	answers?: Record<string, { type?: string; noul?: number }>;
+	answers?: Record<string, { type?: string; noul?: number; choice?: string }>;
 	usage?: { input_tokens?: number; output_tokens?: number };
 }
 
@@ -36,6 +56,8 @@ export interface JevDecision {
 	judged: number[];
 	/** Subset of `judged` to keep. */
 	keep: Set<number>;
+	/** Jev's most likely explanation for each judged unit's keep/remove decision. */
+	reasons: Map<number, DecisionReason>;
 	inputTokens: number;
 }
 
@@ -58,7 +80,7 @@ export async function askJev(
 	cfg: CuratorConfig,
 	signal: AbortSignal | undefined,
 ): Promise<JevDecision | null> {
-	if (newUnits.length === 0) return { judged: [], keep: new Set(), inputTokens: 0 };
+	if (newUnits.length === 0) return { judged: [], keep: new Set(), reasons: new Map(), inputTokens: 0 };
 
 	const lines = newUnits.map((u, i) => `[${i}] (${u.label})\n${truncate(u.text, MAX_UNIT_CHARS)}`);
 
@@ -81,17 +103,39 @@ export async function askJev(
 			type: "noul",
 			instructions:
 				`Consider ONLY context unit [${i}] (${newUnits[i].label}) in the transcript above. ` +
-				`Would any future response in this conversation benefit from having this unit available? ` +
-				`Keep instructions, facts, file contents, code, tool results, useful background, and anything ` +
-				`that may help answer a later question. Summary units (including compaction summaries, ` +
-				`branch summaries, and summaries created earlier in the session) are durable context: keep them. ` +
-				`Keep a unit when it might reasonably become relevant or when you are uncertain. Only answer ` +
-				`no for content that is clearly disposable, such as duplicate or purely transient material with ` +
-				`no likely future value. This is a preference for preservation, not a test of whether the unit ` +
-				`is strictly essential.`,
+				`Decide whether to keep or remove it. A separate reason-classification pass will select the best explanation. ` +
+				`Keep user instructions, preferences, decisions, constraints, unresolved questions, facts, code, file/API details, ` +
+				`useful tool results, caveats, and context that could reasonably help later—even if it is old or already summarized. ` +
+				`Always keep compaction summaries, branch summaries, and summaries created earlier in the session. ` +
+				`Remove only clearly redundant or low-value material. Keep the unit whenever uncertain.`,
 			criteria: {
-				true: "This unit may be useful to a future response — keep it",
-				false: "This unit is clearly disposable and has no likely future value — discard it; summaries are not disposable",
+				true: "Keep this unit",
+				false: "Remove this unit",
+			},
+		};
+		// Jev supports mixed question types in one request. Keep the primary
+		// noul authoritative and ask two native choice questions for explanations.
+		questions[`why_keep_${i}`] = {
+			type: "choice",
+			instructions:
+				`If the primary keep/remove decision for context unit [${i}] is to KEEP it, ` +
+				`select the single best reason. Otherwise select "not-applicable".`,
+			criteria: {
+				...Object.fromEntries(KEEP_REASONS.map((reason) => [reason.id, `${reason.label}: ${reason.description}`])),
+				"not-applicable": "The primary decision is to remove this unit.",
+				unclear: "No clear keep reason identified.",
+			},
+		};
+		questions[`why_remove_${i}`] = {
+			type: "choice",
+			instructions:
+				`If the primary keep/remove decision for context unit [${i}] is to REMOVE it, ` +
+				`select the single best reason. Otherwise select "not-applicable". ` +
+				`Never select a removal reason for a summary.`,
+			criteria: {
+				...Object.fromEntries(REMOVAL_REASONS.map((reason) => [reason.id, `${reason.label}: ${reason.description}`])),
+				"not-applicable": "The primary decision is to keep this unit.",
+				unclear: "No clear removal reason identified.",
 			},
 		};
 	}
@@ -120,14 +164,21 @@ export async function askJev(
 		if (!data.answers) throw new Error("Jev response had no answers");
 
 		const keep = new Set<number>();
+		const reasons = new Map<number, DecisionReason>();
 		for (const i of selected) {
 			const ans = data.answers[`u${i}`];
 			const p = ans?.noul;
 			// Keep on yes (>= threshold), and on any non-numeric/missing
 			// answer: never discard on an undecided question.
 			if (typeof p !== "number" || p >= cfg.threshold) keep.add(i);
+
+			const options = keep.has(i) ? KEEP_REASONS : REMOVAL_REASONS;
+			const choiceKey = keep.has(i) ? `why_keep_${i}` : `why_remove_${i}`;
+			const choice = data.answers[choiceKey]?.choice;
+			const selectedReason = options.find((option) => option.id === choice);
+			reasons.set(i, selectedReason?.label ?? "No clear reason identified");
 		}
-		return { judged: selected, keep, inputTokens: data.usage?.input_tokens ?? 0 };
+		return { judged: selected, keep, reasons, inputTokens: data.usage?.input_tokens ?? 0 };
 	} catch {
 		return null;
 	} finally {

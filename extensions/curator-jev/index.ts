@@ -67,9 +67,11 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		const label = data?.label ?? "context unit";
 		const text = data?.text ?? "";
 		const summary = `${label} — ${data?.messageCount ?? 0} message(s), ~${formatTokens(data?.tokens ?? 0)} tokens`;
-		const box = new Box(1, 1, (value) => theme.bg("customMessageBg", value));
-		box.addChild(new Text(`${theme.fg("accent", "[jev removed]")} ${summary}`, 0, 0));
-		if (expanded) box.addChild(new Text(text, 0, 0));
+		// Keep durable removal records available without making them compete with
+		// the conversation. Expanded content remains inspectable on demand.
+		const box = new Box(1, 0, (value) => value);
+		box.addChild(new Text(theme.fg("dim", `[jev removed] ${summary}`), 0, 0));
+		if (expanded) box.addChild(new Text(theme.fg("dim", text), 0, 0));
 		return box;
 	});
 
@@ -78,11 +80,12 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	// /resume without replaying or sending discarded context to the model.
 	pi.registerEntryRenderer("jev-context-stats", (entry, _options, theme) => {
 		const data = entry.data as { calls?: number; inputTokens?: number; costUsd?: number } | undefined;
-		const box = new Box(1, 1, (value) => theme.bg("customMessageBg", value));
+		// This is durable bookkeeping, not a user-facing event worth highlighting.
+		const box = new Box(1, 0, (value) => value);
 		box.addChild(new Text(
-			`${theme.fg("accent", "[jev stats saved]")} ${data?.calls ?? 0} calls, ${
+			theme.fg("dim", `[jev stats saved] ${data?.calls ?? 0} calls, ${
 				(data?.inputTokens ?? 0).toLocaleString()
-			} input tokens, ${formatUsd(data?.costUsd ?? 0)}`,
+			} input tokens, ${formatUsd(data?.costUsd ?? 0)}`),
 			0,
 			0,
 		));
@@ -111,6 +114,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				fingerprint?: string;
 				label?: string;
 				text?: string;
+				reason?: string;
 				messageCount?: number;
 				tokens?: number;
 				timestamp?: number;
@@ -120,6 +124,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				fingerprint: data.fingerprint,
 				label: data.label ?? "context unit",
 				text: data.text,
+				reason: data.reason,
 				messageCount: data.messageCount ?? 0,
 				tokens: data.tokens ?? 0,
 				timestamp: data.timestamp ?? Date.now(),
@@ -378,6 +383,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						fingerprint: fingerprintUnit(unit),
 						label: unit.label,
 						text: unit.text,
+						reason: decision.reasons.get(local),
 						messageCount: unit.messageIndexes.length,
 						tokens: estimateTokens(unit.text),
 					});
@@ -386,6 +392,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 							fingerprint: removed.fingerprint,
 							label: removed.label,
 							text: removed.text,
+							reason: removed.reason,
 							messageCount: removed.messageCount,
 							tokens: removed.tokens,
 							timestamp: removed.timestamp,
