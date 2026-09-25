@@ -8,9 +8,9 @@ Before every LLM call, pi fires the `context` event with the full message list. 
 
 1. Groups messages into **units** — an assistant tool-call message plus its tool results stay together as one atomic unit, so curation never orphans a tool result.
 2. Checks each unit against the **judgment checkpoint**: every unit Jev has already judged is recorded by content fingerprint, so past decisions are reused and the same data is never sent to Jev twice.
-3. Sends only the **new units** (those after the checkpoint) to Jev's `/v1/systemone` endpoint with **one yes/no (`noul`) question per unit**: *"Could this help a future response?"* The prompt favors preservation; summaries are explicitly treated as durable context.
+3. Sends only the **new units** (those after the checkpoint) to Jev's `/v1/systemone` endpoint. One primary yes/no (`noul`) question decides keep/remove, alongside two native `choice` questions that classify the best keep reason and removal reason. The primary `noul` remains authoritative.
 4. Units Jev rejects are omitted from the current model context and that decision is re-applied on subsequent `context` events (pi itself only lets extensions transform the per-call payload, not edit the stored session).
-5. Every newly removed unit is also written as a durable, session-scoped pi entry. It appears in the transcript as a collapsed `[jev removed]` record and can be expanded to inspect the removed text; this record is display-only and is not sent back to the LLM.
+5. Every newly removed unit is also written as a durable, session-scoped pi entry. It appears as a collapsed `[jev removed]` record and can be expanded to inspect the removed text. The `/removed` popup shows the selected removal reason; these records are display-only and are not sent back to the LLM.
 
 Jev is a good fit here: it returns calibrated probabilities in ~70–500ms, costs $42/B input tokens with free outputs, and is purpose-built for this kind of structured semantic judgment.
 
@@ -20,7 +20,7 @@ Because each unit is judged once, the per-turn Jev cost stays tiny (usually 1–
 
 - **No API key** → context passes through untouched (one warning per session).
 - **Any Jev API error / timeout / rate-limit** → context passes through untouched, and the new units are retried on the next event (nothing is recorded).
-- **A "no" requires confidence**: on uncertainty Jev should answer yes. Summary units—including summaries created earlier—are explicitly kept; non-numeric/missing answers are also kept.
+- **The primary `noul` answer controls keep/remove**; reason probes only explain the decision and never override it. Missing/non-numeric primary answers are kept. Summaries—including summaries created earlier—are explicitly protected by the prompt.
 - **System messages are always kept** (they define tools and prompt sections) and are never judged.
 - **The latest unit (current user request) is always kept** for the current turn; it becomes eligible for judgment once newer messages arrive.
 - **Token floor**: curation only runs when estimated context exceeds `CURATOR_JEV_MIN_TOKENS` (default 8000), so small contexts pay no extra latency.
@@ -134,13 +134,13 @@ Jev's `/v1/systemone` takes a `state` (the numbered new units after the checkpoi
 ```json
 "u3": {
   "type": "noul",
-  "instructions": "Consider ONLY context unit [3] (assistant+toolResult:bash) in the transcript above. Could this help any future response? Keep useful context, and always keep compaction, branch, or previously-created summary units. Only answer no for clearly disposable content; when uncertain, keep it …",
-  "criteria": { "true": "This unit may help a future response — keep it",
-                "false": "This unit is clearly disposable; summaries are not disposable" }
+  "instructions": "Consider ONLY context unit [3] (assistant+toolResult:bash) in the transcript above. Remove only if one specific reason fits: duplicate, fully superseded, transient chatter, redundant intermediate output, or completed detail with no reusable value. Keep durable instructions, facts, code, useful results, and all summaries. If no reason clearly fits, keep it …",
+  "criteria": { "true": "Keep: useful or no specific reason fits",
+                "false": "Remove only when one specific reason fits; never remove a summary" }
 }
 ```
 
-The response's `noul` value is the probability of "yes" — units below threshold are dropped.
+The primary response's `noul` value is the probability of "keep" — units below threshold are dropped. Two `choice` responses select the best keep and removal explanations; the explanation corresponding to the primary decision is saved. If no valid choice is returned, the popup says no clear reason was identified. Explanations are informational only and never change the primary keep/remove result.
 
 ## Publishing
 
