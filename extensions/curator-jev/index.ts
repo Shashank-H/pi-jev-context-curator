@@ -78,18 +78,9 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	// The latest snapshot is durable session data. It is deliberately separate
 	// from the removed-context entries so the stats command can be restored on
 	// /resume without replaying or sending discarded context to the model.
-	pi.registerEntryRenderer("jev-context-stats", (entry, _options, theme) => {
-		const data = entry.data as { calls?: number; inputTokens?: number; costUsd?: number } | undefined;
+	pi.registerEntryRenderer("jev-context-stats", (_entry, _options, _theme) => {
 		// This is durable bookkeeping, not a user-facing event worth highlighting.
-		const box = new Box(1, 0, (value) => value);
-		box.addChild(new Text(
-			theme.fg("dim", `[jev stats saved] ${data?.calls ?? 0} calls, ${
-				(data?.inputTokens ?? 0).toLocaleString()
-			} input tokens, ${formatUsd(data?.costUsd ?? 0)}`),
-			0,
-			0,
-		));
-		return box;
+		return new Box(0, 0, (value) => value);
 	});
 
 	let enabled = process.env.CURATOR_JEV_ENABLED !== "0";
