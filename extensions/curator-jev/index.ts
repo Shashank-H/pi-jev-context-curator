@@ -8,7 +8,8 @@
  * Checkpoint model: every unit Jev judges is recorded by content fingerprint.
  * Each `context` event reuses past judgments and sends only new units (those
  * after the checkpoint) to Jev, so the same data is never sent twice. A unit
- * Jev rejects is permanently discarded from what the model sees.
+ * Jev rejects is omitted from the current model context; system and summary
+ * messages are always preserved.
  *
  * Wiring only — the real work lives in the sibling modules:
  *   config.ts      env-based configuration
@@ -49,6 +50,7 @@ import { JudgmentCheckpoint } from "./checkpoint.ts";
 import { askJev } from "./jev.ts";
 import { RemovedContextStore } from "./removed-context.ts";
 import { RemovedContextDialog } from "./removed-context-dialog.ts";
+import { collectCacheMetrics } from "./cache-graph.ts";
 
 export default function curatorJev(pi: ExtensionAPI): void {
 	const cfg = loadConfig();
@@ -65,10 +67,20 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		const label = data?.label ?? "context unit";
 		const text = data?.text ?? "";
 		const summary = `${label} — ${data?.messageCount ?? 0} message(s), ~${formatTokens(data?.tokens ?? 0)} tokens`;
-		const box = new Box(1, 1, (value) => theme.bg("customMessageBg", value));
-		box.addChild(new Text(`${theme.fg("accent", "[jev removed]")} ${summary}`, 0, 0));
-		if (expanded) box.addChild(new Text(text, 0, 0));
+		// Keep durable removal records available without making them compete with
+		// the conversation. Expanded content remains inspectable on demand.
+		const box = new Box(1, 0, (value) => value);
+		box.addChild(new Text(theme.fg("dim", `[jev removed] ${summary}`), 0, 0));
+		if (expanded) box.addChild(new Text(theme.fg("dim", text), 0, 0));
 		return box;
+	});
+
+	// The latest snapshot is durable session data. It is deliberately separate
+	// from the removed-context entries so the stats command can be restored on
+	// /resume without replaying or sending discarded context to the model.
+	pi.registerEntryRenderer("jev-context-stats", (_entry, _options, _theme) => {
+		// This is durable bookkeeping, not a user-facing event worth highlighting.
+		return new Box(0, 0, (value) => value);
 	});
 
 	let enabled = process.env.CURATOR_JEV_ENABLED !== "0";
@@ -81,16 +93,63 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	};
 
 	// Judgments are per-session: a new session starts with a clean checkpoint.
-	pi.on("session_start", () => {
+	pi.on("session_start", async (_event, ctx) => {
 		checkpoint.clear();
 		removedContext.clear();
+		// Rehydrate the session-local removal list from durable TUI-only entries.
+		// This is intentionally read from the active session, so /resume restores
+		// its own history without leaking removals between sessions.
+		for (const entry of ctx.sessionManager.getEntries()) {
+			if (entry.type !== "custom" || entry.customType !== "jev-context-removed") continue;
+			const data = entry.data as {
+				fingerprint?: string;
+				label?: string;
+				text?: string;
+				reason?: string;
+				messageCount?: number;
+				tokens?: number;
+				timestamp?: number;
+			} | undefined;
+			if (!data?.fingerprint || typeof data.text !== "string") continue;
+			removedContext.restore({
+				fingerprint: data.fingerprint,
+				label: data.label ?? "context unit",
+				text: data.text,
+				reason: data.reason,
+				messageCount: data.messageCount ?? 0,
+				tokens: data.tokens ?? 0,
+				timestamp: data.timestamp ?? Date.now(),
+			});
+		}
 		const fresh = createRemovalStats();
 		Object.assign(removal, fresh);
 		const freshCost = createStats();
 		Object.assign(stats, freshCost);
-		warnedNoKey = false;
 		contextCalls = 0;
+		// Restore the most recent aggregate snapshot for this session. Entries
+		// are append-only, so the last matching one is the current state.
+		for (const entry of ctx.sessionManager.getEntries()) {
+			if (entry.type !== "custom" || entry.customType !== "jev-context-stats") continue;
+			const data = entry.data as {
+				stats?: Partial<typeof stats>;
+				removal?: Partial<typeof removal>;
+				contextCalls?: number;
+			} | undefined;
+			if (data?.stats) Object.assign(stats, data.stats);
+			if (data?.removal) Object.assign(removal, data.removal);
+			if (typeof data?.contextCalls === "number") contextCalls = data.contextCalls;
+		}
+		warnedNoKey = false;
 	});
+
+	const persistStats = () => {
+		pi.appendEntry("jev-context-stats", {
+			stats: { ...stats },
+			removal: { ...removal },
+			contextCalls,
+			timestamp: Date.now(),
+		});
+	};
 
 	const statusText = (): string => {
 		const { key, source } = resolveApiKey(sessionApiKey);
@@ -165,7 +224,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					}
 					await ctx.ui.custom(
 						(tui, theme, _keybindings, done) =>
-							new RemovedContextDialog(theme, entries, () => done(null)),
+							new RemovedContextDialog(theme, entries, collectCacheMetrics(ctx.sessionManager.getEntries()), () => done(null)),
 						{
 							overlay: true,
 							overlayOptions: {
@@ -183,6 +242,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					removedContext.clear();
 					const fresh = createRemovalStats();
 					Object.assign(removal, fresh);
+					persistStats();
 					ctx.ui.notify(
 						`[${TAG}] checkpoint and removed context cleared — all units will be re-judged from scratch (cost stats untouched)`,
 						"info",
@@ -293,6 +353,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				return;
 			}
 			const callCost = recordCall(stats, decision.inputTokens);
+			persistStats();
 
 			let discardedUnits = 0;
 			let discardedMessages = 0;
@@ -313,15 +374,19 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						fingerprint: fingerprintUnit(unit),
 						label: unit.label,
 						text: unit.text,
+						reason: decision.reasons.get(local),
 						messageCount: unit.messageIndexes.length,
 						tokens: estimateTokens(unit.text),
 					});
 					if (removed) {
 						pi.appendEntry("jev-context-removed", {
+							fingerprint: removed.fingerprint,
 							label: removed.label,
 							text: removed.text,
+							reason: removed.reason,
 							messageCount: removed.messageCount,
 							tokens: removed.tokens,
+							timestamp: removed.timestamp,
 						});
 					}
 				}
@@ -349,6 +414,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 			}
 		});
 		recordCuration(removal, judgedNow, messages.length, estTokens, removedMessages, removedTokens);
+		persistStats();
 
 		if (removedMessages === 0) {
 			debug(ctx, `no removals: ${messages.length} messages (~${formatTokens(estTokens)} tokens) all kept`);

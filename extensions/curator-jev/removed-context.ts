@@ -4,6 +4,7 @@ export interface RemovedContextEntry {
 	fingerprint: string;
 	label: string;
 	text: string;
+	reason?: string;
 	messageCount: number;
 	tokens: number;
 	timestamp: number;
@@ -18,6 +19,11 @@ export class RemovedContextStore {
 		const stored = { ...entry, timestamp: Date.now() };
 		this.entries.set(entry.fingerprint, stored);
 		return stored;
+	}
+
+	/** Restore a previously persisted entry when resuming this session. */
+	restore(entry: RemovedContextEntry): void {
+		if (!this.entries.has(entry.fingerprint)) this.entries.set(entry.fingerprint, entry);
 	}
 
 	clear(): void {
