@@ -1,6 +1,6 @@
 /** Session-scoped record of context units inspected by Jev. */
 
-export interface RemovedContextEntry {
+export interface ContextInspectionEntry {
 	fingerprint: string;
 	label: string;
 	text: string;
@@ -11,11 +11,11 @@ export interface RemovedContextEntry {
 	kept: boolean;
 }
 
-export class RemovedContextStore {
-	private readonly entries = new Map<string, RemovedContextEntry>();
+export class ContextInspectionStore {
+	private readonly entries = new Map<string, ContextInspectionEntry>();
 
 	/** Store each inspected unit once; returns true when it is new. */
-	record(entry: Omit<RemovedContextEntry, "timestamp">): RemovedContextEntry | undefined {
+	record(entry: Omit<ContextInspectionEntry, "timestamp">): ContextInspectionEntry | undefined {
 		if (this.entries.has(entry.fingerprint)) return undefined;
 		const stored = { ...entry, timestamp: Date.now() };
 		this.entries.set(entry.fingerprint, stored);
@@ -23,7 +23,7 @@ export class RemovedContextStore {
 	}
 
 	/** Restore a previously persisted entry when resuming this session. */
-	restore(entry: RemovedContextEntry): void {
+	restore(entry: ContextInspectionEntry): void {
 		if (!this.entries.has(entry.fingerprint)) this.entries.set(entry.fingerprint, entry);
 	}
 
@@ -31,7 +31,7 @@ export class RemovedContextStore {
 		this.entries.clear();
 	}
 
-	get all(): readonly RemovedContextEntry[] {
+	get all(): readonly ContextInspectionEntry[] {
 		return [...this.entries.values()];
 	}
 }

@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
-import type { RemovedContextEntry } from "./removed-context.ts";
+import type { ContextInspectionEntry } from "./context-inspection.ts";
 import { formatTokens } from "./stats.ts";
 import type { CacheGraphView, CacheHitMetric } from "./cache-graph.ts";
 import { renderCacheGraph } from "./cache-graph.ts";
@@ -14,7 +14,7 @@ function fitLine(content: string, width: number): string {
 }
 
 /** Two-tab session popup: inspected context decisions and provider cache hit ratio. */
-export class RemovedContextDialog implements Component {
+export class ContextInspectionDialog implements Component {
 	private scrollOffset = 0;
 	private selectedIndex = 0;
 	private expandedIndex?: number;
@@ -25,7 +25,7 @@ export class RemovedContextDialog implements Component {
 
 	constructor(
 		private readonly theme: Theme,
-		private readonly entries: readonly RemovedContextEntry[],
+		private readonly entries: readonly ContextInspectionEntry[],
 		private readonly cacheMetrics: readonly CacheHitMetric[],
 		private readonly onClose: () => void,
 	) {}

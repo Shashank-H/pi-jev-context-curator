@@ -57,7 +57,7 @@ extensions/curator-jev/
   checkpoint.ts  content-addressed record of judged units (each unit judged once)
   jev.ts       the Jev decision call (/v1/systemone)
   stats.ts     session cost + removal tracking
-  removed-context.ts  session-scoped removed-unit index
+  context-inspection.ts  session-scoped Jev decision index
 ```
 
 pi discovers the extension via `extensions/curator-jev/index.ts`; the other

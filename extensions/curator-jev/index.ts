@@ -48,8 +48,8 @@ import {
 } from "./units.ts";
 import { JudgmentCheckpoint } from "./checkpoint.ts";
 import { askJev } from "./jev.ts";
-import { RemovedContextStore } from "./removed-context.ts";
-import { RemovedContextDialog } from "./removed-context-dialog.ts";
+import { ContextInspectionStore } from "./context-inspection.ts";
+import { ContextInspectionDialog } from "./context-inspection-dialog.ts";
 import { collectCacheMetrics } from "./cache-graph.ts";
 
 export default function curatorJev(pi: ExtensionAPI): void {
@@ -57,7 +57,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	const stats = createStats();
 	const removal = createRemovalStats();
 	const checkpoint = new JudgmentCheckpoint();
-	const removedContext = new RemovedContextStore();
+	const contextInspection = new ContextInspectionStore();
 
 	// Durable session entries let users inspect Jev's decisions without sending
 	// inspected content back to the model. The in-memory store powers the
@@ -79,7 +79,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	pi.registerEntryRenderer("jev-context-inspected", () => new Box(0, 0, (value) => value));
 
 	// The latest snapshot is durable session data. It is deliberately separate
-	// from the removed-context entries so the stats command can be restored on
+	// from the inspection entries so the stats command can be restored on
 	// /resume without replaying or sending discarded context to the model.
 	pi.registerEntryRenderer("jev-context-stats", (_entry, _options, _theme) => {
 		// This is durable bookkeeping, not a user-facing event worth highlighting.
@@ -98,7 +98,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	// Judgments are per-session: a new session starts with a clean checkpoint.
 	pi.on("session_start", async (_event, ctx) => {
 		checkpoint.clear();
-		removedContext.clear();
+		contextInspection.clear();
 		// Rehydrate the session-local removal list from durable TUI-only entries.
 		// This is intentionally read from the active session, so /resume restores
 		// its own history without leaking removals between sessions.
@@ -115,7 +115,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				kept?: boolean;
 			} | undefined;
 			if (!data?.fingerprint || typeof data.text !== "string") continue;
-			removedContext.restore({
+			contextInspection.restore({
 				fingerprint: data.fingerprint,
 				label: data.label ?? "context unit",
 				text: data.text,
@@ -240,14 +240,14 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					break;
 				case "inspect":
 				case "removed": {
-					const entries = removedContext.all;
+					const entries = contextInspection.all;
 					if (entries.length === 0) {
 						ctx.ui.notify(`[${TAG}] no context decisions have been recorded in this session`, "info");
 						break;
 					}
 					await ctx.ui.custom(
 						(tui, theme, _keybindings, done) =>
-							new RemovedContextDialog(theme, entries, collectCacheMetrics(ctx.sessionManager.getEntries()), () => done(null)),
+							new ContextInspectionDialog(theme, entries, collectCacheMetrics(ctx.sessionManager.getEntries()), () => done(null)),
 						{
 							overlay: true,
 							overlayOptions: {
@@ -262,12 +262,12 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				}
 				case "reset": {
 					checkpoint.clear();
-					removedContext.clear();
+					contextInspection.clear();
 					const fresh = createRemovalStats();
 					Object.assign(removal, fresh);
 					persistStats();
 					ctx.ui.notify(
-						`[${TAG}] checkpoint and removed context cleared — all units will be re-judged from scratch (cost stats untouched)`,
+						`[${TAG}] context inspection history cleared — all units will be re-judged from scratch (cost stats untouched)`,
 						"info",
 					);
 					break;
@@ -394,7 +394,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					discardedMessages += unit.messageIndexes.length;
 					discardedTokens += estimateTokens(unit.text);
 				}
-				const inspected = removedContext.record({
+				const inspected = contextInspection.record({
 					fingerprint: fingerprintUnit(unit),
 					label: unit.label,
 					text: unit.text,
