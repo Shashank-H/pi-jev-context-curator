@@ -18,7 +18,7 @@ export class ContextInspectionDialog implements Component {
 	private scrollOffset = 0;
 	private selectedIndex = 0;
 	private expandedIndex?: number;
-	private tab: "removed" | "cache" = "removed";
+	private tab: "inspect" | "cache" = "inspect";
 	private cacheView: CacheGraphView = "per-turn";
 	private cachedWidth?: number;
 	private cachedLines?: string[];
@@ -69,13 +69,13 @@ export class ContextInspectionDialog implements Component {
 		const lines = [
 			this.theme.fg("border", `╭${"─".repeat(innerWidth)}╮`),
 			`${border}${fitLine(this.theme.fg("accent", "Jev inspection dashboard"), innerWidth)}${border}`,
-			`${border}${fitLine(this.tab === "removed" ? this.theme.fg("accent", "[1] Inspect context") + "  [2] Cache hit ratio" : "[1] Inspect context  " + this.theme.fg("accent", "[2] Cache hit ratio"), innerWidth)}${border}`,
+			`${border}${fitLine(this.tab === "inspect" ? this.theme.fg("accent", "[1] Inspect context") + "  [2] Cache hit ratio" : "[1] Inspect context  " + this.theme.fg("accent", "[2] Cache hit ratio"), innerWidth)}${border}`,
 			`${border}${fitLine(this.theme.fg("border", "─".repeat(innerWidth)), innerWidth)}${border}`,
 		];
 		for (let i = 0; i < DEFAULT_BODY_ROWS; i++) lines.push(`${border} ${fitLine(visible[i] ?? "", innerWidth - 2)} ${border}`);
 		const position = `${this.scrollOffset + 1}-${Math.min(this.scrollOffset + DEFAULT_BODY_ROWS, bodyLines.length)} of ${bodyLines.length}`;
 		const cacheHelp = this.tab === "cache" ? " • v cycle chart" : "";
-		const removedHelp = this.tab === "removed" ? " • Enter expand" : "";
+		const removedHelp = this.tab === "inspect" ? " • Enter expand" : "";
 		lines.push(`${border}${fitLine(this.theme.fg("dim", `←/→ or 1/2 tabs${removedHelp}${cacheHelp} • ↑/↓ scroll • PgUp/PgDn • q/Esc close   ${position}`), innerWidth)}${border}`);
 		lines.push(this.theme.fg("border", `╰${"─".repeat(innerWidth)}╯`));
 		return lines;
@@ -84,7 +84,7 @@ export class ContextInspectionDialog implements Component {
 	handleInput(data: string): void {
 		if (matchesKey(data, Key.escape) || data === "q") return this.onClose();
 		if (data === "1" || data === "2" || matchesKey(data, Key.left) || matchesKey(data, Key.right)) {
-			this.tab = data === "1" || matchesKey(data, Key.left) ? "removed" : "cache";
+			this.tab = data === "1" || matchesKey(data, Key.left) ? "inspect" : "cache";
 			this.scrollOffset = 0;
 			this.invalidate();
 			return;
@@ -95,7 +95,7 @@ export class ContextInspectionDialog implements Component {
 			this.invalidate();
 			return;
 		}
-		if (this.tab === "removed" && (matchesKey(data, Key.enter) || data === "\r" || data === "\n")) {
+		if (this.tab === "inspect" && (matchesKey(data, Key.enter) || data === "\r" || data === "\n")) {
 			this.expandedIndex = this.expandedIndex === this.selectedIndex ? undefined : this.selectedIndex;
 			this.scrollOffset = 0;
 			this.invalidate();
@@ -103,11 +103,11 @@ export class ContextInspectionDialog implements Component {
 		}
 		const pageSize = DEFAULT_BODY_ROWS;
 		const entryCount = this.entries.length;
-		if (this.tab === "removed" && entryCount > 0 && matchesKey(data, Key.up)) {
+		if (this.tab === "inspect" && entryCount > 0 && matchesKey(data, Key.up)) {
 			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
 			this.expandedIndex = undefined;
 			this.scrollOffset = 0;
-		} else if (this.tab === "removed" && entryCount > 0 && matchesKey(data, Key.down)) {
+		} else if (this.tab === "inspect" && entryCount > 0 && matchesKey(data, Key.down)) {
 			this.selectedIndex = Math.min(entryCount - 1, this.selectedIndex + 1);
 			this.expandedIndex = undefined;
 			this.scrollOffset = 0;
