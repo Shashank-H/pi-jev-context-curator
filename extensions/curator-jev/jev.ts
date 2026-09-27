@@ -103,11 +103,22 @@ export async function askJev(
 			type: "noul",
 			instructions:
 				`Consider ONLY context unit [${i}] (${newUnits[i].label}) in the transcript above. ` +
-				`Decide whether to keep or remove it. A separate reason-classification pass will select the best explanation. ` +
-				`Keep user instructions, preferences, decisions, constraints, unresolved questions, facts, code, file/API details, ` +
-				`useful tool results, caveats, and context that could reasonably help later—even if it is old or already summarized. ` +
-				`Always keep compaction summaries, branch summaries, and summaries created earlier in the session. ` +
-				`Remove only clearly redundant or low-value material. Keep the unit whenever uncertain.`,
+				`Decide whether keeping this unit is likely to improve a future response enough to justify its context cost; ` +
+				`a separate reason-classification pass will explain the decision. Reason from first principles rather than using ` +
+				`a mechanical checklist. Ask: what future task could need this, does it change what the agent should do or say, ` +
+				`is it durable or merely transient, is it unique or recoverable, and would removing it make the agent less ` +
+				`accurate, consistent, or able to continue the work? Treat user intent, preferences, constraints, decisions, ` +
+				`open questions, unresolved risks, unique facts, code/API details, useful results, caveats, and durable ` +
+				`summaries as strong evidence of future value, not as labels that decide mechanically. ` +
+				`Examples of often-useful context include: a user's chosen design direction, an API quirk discovered during ` +
+				`debugging, a failing test and its root cause, a file format or schema, an unresolved trade-off, or a compact ` +
+				`summary of decisions made earlier. Examples of often-low-value context include: greetings, acknowledgements, ` +
+				`coordination chatter, repeated status updates, exact duplicates, retry noise, and verbose intermediate output ` +
+				`when its conclusion and useful result are already retained. A stale detail may still matter if it records a ` +
+				`decision or explains why the current implementation looks the way it does; a long message may be disposable ` +
+				`if it is fully recoverable elsewhere. Prefer removal when the unit has little plausible future value and its ` +
+				`loss is unlikely to change a future response. Prefer keeping when the consequences of removal are uncertain. ` +
+				`These examples are guidance, not hard rules: use the meaning and role of this particular unit in the ongoing work.`,
 			criteria: {
 				true: "Keep this unit",
 				false: "Remove this unit",
@@ -129,9 +140,9 @@ export async function askJev(
 		questions[`why_remove_${i}`] = {
 			type: "choice",
 			instructions:
-				`If the primary keep/remove decision for context unit [${i}] is to REMOVE it, ` +
-				`select the single best reason. Otherwise select "not-applicable". ` +
-				`Never select a removal reason for a summary.`,
+				`If the primary keep/remove decision for context unit [${i}] is to REMOVE it, select the best explanation ` +
+				`of why its likely future value is low. Otherwise select "not-applicable". Choose a removal reason based on ` +
+				`the unit's meaning in this work, not just its age, length, role, or wording.`,
 			criteria: {
 				...Object.fromEntries(REMOVAL_REASONS.map((reason) => [reason.id, `${reason.label}: ${reason.description}`])),
 				"not-applicable": "The primary decision is to keep this unit.",
