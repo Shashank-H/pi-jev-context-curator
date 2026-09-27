@@ -1,4 +1,4 @@
-/** Session-scoped record of context units discarded by Jev. */
+/** Session-scoped record of context units inspected by Jev. */
 
 export interface RemovedContextEntry {
 	fingerprint: string;
@@ -8,12 +8,13 @@ export interface RemovedContextEntry {
 	messageCount: number;
 	tokens: number;
 	timestamp: number;
+	kept: boolean;
 }
 
 export class RemovedContextStore {
 	private readonly entries = new Map<string, RemovedContextEntry>();
 
-	/** Store each discarded unit once; returns true when it is new. */
+	/** Store each inspected unit once; returns true when it is new. */
 	record(entry: Omit<RemovedContextEntry, "timestamp">): RemovedContextEntry | undefined {
 		if (this.entries.has(entry.fingerprint)) return undefined;
 		const stored = { ...entry, timestamp: Date.now() };
