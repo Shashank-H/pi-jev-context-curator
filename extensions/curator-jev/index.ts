@@ -174,8 +174,25 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("jev-context-curator", {
-		description:
-			"Control the context pruner: status | stats | inspect | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n>",
+		description: "Control Jev context curation",
+		getArgumentCompletions: (prefix) => {
+			const subcommands = [
+				{ value: "status", description: "Show current curation status" },
+				{ value: "stats", description: "Show session statistics" },
+				{ value: "inspect", description: "Inspect kept and removed context decisions" },
+				{ value: "on", description: "Enable curation" },
+				{ value: "off", description: "Disable curation" },
+				{ value: "set-key", description: "Set the TypeSafe API key" },
+				{ value: "clear-key", description: "Clear the stored API key" },
+				{ value: "cost", description: "Show session cost" },
+				{ value: "reset", description: "Reset the judgment checkpoint" },
+				{ value: "threshold", description: "Set the keep threshold" },
+				{ value: "min-tokens", description: "Set the minimum context size" },
+				{ value: "frequency", description: "Set the Jev query frequency" },
+			];
+			const filtered = subcommands.filter((command) => command.value.startsWith(prefix));
+			return filtered.length > 0 ? filtered.map((command) => ({ ...command, label: command.value })) : null;
+		},
 		handler: async (args, ctx) => {
 			const [subRaw, ...rest] = args.trim().split(/\s+/);
 			const sub = (subRaw || "status").toLowerCase();
