@@ -48,8 +48,8 @@ import {
 } from "./units.ts";
 import { JudgmentCheckpoint } from "./checkpoint.ts";
 import { askJev } from "./jev.ts";
-import { RemovedContextStore } from "./removed-context.ts";
-import { RemovedContextDialog } from "./removed-context-dialog.ts";
+import { ContextInspectionStore } from "./context-inspection.ts";
+import { ContextInspectionDialog } from "./context-inspection-dialog.ts";
 import { collectCacheMetrics } from "./cache-graph.ts";
 
 export default function curatorJev(pi: ExtensionAPI): void {
@@ -57,13 +57,13 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	const stats = createStats();
 	const removal = createRemovalStats();
 	const checkpoint = new JudgmentCheckpoint();
-	const removedContext = new RemovedContextStore();
+	const contextInspection = new ContextInspectionStore();
 
-	// Durable session entries let users inspect what was pruned without sending
-	// the discarded content back to the model. The in-memory store powers the
+	// Durable session entries let users inspect Jev's decisions without sending
+	// inspected content back to the model. The in-memory store powers the
 	// command; appendEntry makes the same record survive session reloads.
 	pi.registerEntryRenderer("jev-context-removed", (entry, { expanded }, theme) => {
-		const data = entry.data as { label?: string; text?: string; messageCount?: number; tokens?: number } | undefined;
+		const data = entry.data as { label?: string; text?: string; messageCount?: number; tokens?: number; reason?: string } | undefined;
 		const label = data?.label ?? "context unit";
 		const text = data?.text ?? "";
 		const summary = `${label} — ${data?.messageCount ?? 0} message(s), ~${formatTokens(data?.tokens ?? 0)} tokens`;
@@ -74,9 +74,12 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		if (expanded) box.addChild(new Text(theme.fg("dim", text), 0, 0));
 		return box;
 	});
+	// Kept decisions are durable inspection data but should not add visible
+	// transcript entries; they remain available through the inspect popup.
+	pi.registerEntryRenderer("jev-context-inspected", () => new Box(0, 0, (value) => value));
 
 	// The latest snapshot is durable session data. It is deliberately separate
-	// from the removed-context entries so the stats command can be restored on
+	// from the inspection entries so the stats command can be restored on
 	// /resume without replaying or sending discarded context to the model.
 	pi.registerEntryRenderer("jev-context-stats", (_entry, _options, _theme) => {
 		// This is durable bookkeeping, not a user-facing event worth highlighting.
@@ -95,12 +98,12 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	// Judgments are per-session: a new session starts with a clean checkpoint.
 	pi.on("session_start", async (_event, ctx) => {
 		checkpoint.clear();
-		removedContext.clear();
+		contextInspection.clear();
 		// Rehydrate the session-local removal list from durable TUI-only entries.
 		// This is intentionally read from the active session, so /resume restores
 		// its own history without leaking removals between sessions.
 		for (const entry of ctx.sessionManager.getEntries()) {
-			if (entry.type !== "custom" || entry.customType !== "jev-context-removed") continue;
+			if (entry.type !== "custom" || !["jev-context-removed", "jev-context-inspected"].includes(entry.customType)) continue;
 			const data = entry.data as {
 				fingerprint?: string;
 				label?: string;
@@ -109,9 +112,10 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				messageCount?: number;
 				tokens?: number;
 				timestamp?: number;
+				kept?: boolean;
 			} | undefined;
 			if (!data?.fingerprint || typeof data.text !== "string") continue;
-			removedContext.restore({
+			contextInspection.restore({
 				fingerprint: data.fingerprint,
 				label: data.label ?? "context unit",
 				text: data.text,
@@ -119,6 +123,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				messageCount: data.messageCount ?? 0,
 				tokens: data.tokens ?? 0,
 				timestamp: data.timestamp ?? Date.now(),
+				kept: data.kept ?? entry.customType === "jev-context-inspected",
 			});
 		}
 		const fresh = createRemovalStats();
@@ -169,8 +174,25 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("jev-context-curator", {
-		description:
-			"Control the context pruner: status | stats | removed | on | off | set-key <key> | clear-key | cost | reset | threshold <0-1> | min-tokens <n> | frequency <n>",
+		description: "Control Jev context curation",
+		getArgumentCompletions: (prefix) => {
+			const subcommands = [
+				{ value: "status", description: "Show current curation status" },
+				{ value: "stats", description: "Show session statistics" },
+				{ value: "inspect", description: "Inspect kept and removed context decisions" },
+				{ value: "on", description: "Enable curation" },
+				{ value: "off", description: "Disable curation" },
+				{ value: "set-key", description: "Set the TypeSafe API key" },
+				{ value: "clear-key", description: "Clear the stored API key" },
+				{ value: "cost", description: "Show session cost" },
+				{ value: "reset", description: "Reset the judgment checkpoint" },
+				{ value: "threshold", description: "Set the keep threshold" },
+				{ value: "min-tokens", description: "Set the minimum context size" },
+				{ value: "frequency", description: "Set the Jev query frequency" },
+			];
+			const filtered = subcommands.filter((command) => command.value.startsWith(prefix));
+			return filtered.length > 0 ? filtered.map((command) => ({ ...command, label: command.value })) : null;
+		},
 		handler: async (args, ctx) => {
 			const [subRaw, ...rest] = args.trim().split(/\s+/);
 			const sub = (subRaw || "status").toLowerCase();
@@ -216,15 +238,16 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				case "stats":
 					ctx.ui.notify(formatStatsSummary(stats, removal), "info");
 					break;
+				case "inspect":
 				case "removed": {
-					const entries = removedContext.all;
+					const entries = contextInspection.all;
 					if (entries.length === 0) {
-						ctx.ui.notify(`[${TAG}] no context has been removed in this session`, "info");
+						ctx.ui.notify(`[${TAG}] no context decisions have been recorded in this session`, "info");
 						break;
 					}
 					await ctx.ui.custom(
 						(tui, theme, _keybindings, done) =>
-							new RemovedContextDialog(theme, entries, collectCacheMetrics(ctx.sessionManager.getEntries()), () => done(null)),
+							new ContextInspectionDialog(theme, entries, collectCacheMetrics(ctx.sessionManager.getEntries()), () => done(null)),
 						{
 							overlay: true,
 							overlayOptions: {
@@ -239,12 +262,12 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				}
 				case "reset": {
 					checkpoint.clear();
-					removedContext.clear();
+					contextInspection.clear();
 					const fresh = createRemovalStats();
 					Object.assign(removal, fresh);
 					persistStats();
 					ctx.ui.notify(
-						`[${TAG}] checkpoint and removed context cleared — all units will be re-judged from scratch (cost stats untouched)`,
+						`[${TAG}] context inspection history cleared — all units will be re-judged from scratch (cost stats untouched)`,
 						"info",
 					);
 					break;
@@ -370,25 +393,27 @@ export default function curatorJev(pi: ExtensionAPI): void {
 					discardedUnits++;
 					discardedMessages += unit.messageIndexes.length;
 					discardedTokens += estimateTokens(unit.text);
-					const removed = removedContext.record({
-						fingerprint: fingerprintUnit(unit),
-						label: unit.label,
-						text: unit.text,
-						reason: decision.reasons.get(local),
-						messageCount: unit.messageIndexes.length,
-						tokens: estimateTokens(unit.text),
+				}
+				const inspected = contextInspection.record({
+					fingerprint: fingerprintUnit(unit),
+					label: unit.label,
+					text: unit.text,
+					reason: decision.reasons.get(local),
+					messageCount: unit.messageIndexes.length,
+					tokens: estimateTokens(unit.text),
+					kept: keep,
+				});
+				if (inspected) {
+					pi.appendEntry(keep ? "jev-context-inspected" : "jev-context-removed", {
+						fingerprint: inspected.fingerprint,
+						label: inspected.label,
+						text: inspected.text,
+						reason: inspected.reason,
+						messageCount: inspected.messageCount,
+						tokens: inspected.tokens,
+						timestamp: inspected.timestamp,
+						kept: inspected.kept,
 					});
-					if (removed) {
-						pi.appendEntry("jev-context-removed", {
-							fingerprint: removed.fingerprint,
-							label: removed.label,
-							text: removed.text,
-							reason: removed.reason,
-							messageCount: removed.messageCount,
-							tokens: removed.tokens,
-							timestamp: removed.timestamp,
-						});
-					}
 				}
 			}
 			recordDiscarded(removal, discardedUnits, discardedMessages, discardedTokens);

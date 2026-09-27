@@ -57,7 +57,7 @@ extensions/curator-jev/
   checkpoint.ts  content-addressed record of judged units (each unit judged once)
   jev.ts       the Jev decision call (/v1/systemone)
   stats.ts     session cost + removal tracking
-  removed-context.ts  session-scoped removed-unit index
+  context-inspection.ts  session-scoped Jev decision index
 ```
 
 pi discovers the extension via `extensions/curator-jev/index.ts`; the other
@@ -93,7 +93,7 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 ```
 /jev-context-curator status            # show state, settings, key source, checkpoint size, session savings, session cost
 /jev-context-curator stats             # detailed removal + cost stats for the session
-/jev-context-curator removed           # list removed units captured during this runtime
+/jev-context-curator inspect           # inspect Jev's kept and removed context decisions
 /jev-context-curator on | off          # toggle curation for the session
 /jev-context-curator set-key <key>     # add your TypeSafe API key (persisted to ~/.pi/curator-jev.json)
 /jev-context-curator clear-key         # remove the stored API key
@@ -113,11 +113,12 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 - cumulative messages and estimated tokens removed this session,
 - Jev calls, input tokens, and estimated cost.
 
-Removed context is stored per pi session as durable extension entries. In the TUI,
-expand each `[jev removed]` entry in the transcript to view its full text. The
-`removed` command provides a text summary of entries captured since the extension
-was loaded. Removed entries are intentionally display-only and are never included
-in future model context.
+Jev's context decisions are stored per pi session as durable extension entries. In
+the TUI, expand each `[jev removed]` entry in the transcript to view its full text.
+The `inspect` command opens a compact dashboard of kept and removed units; select
+an item and press Enter to inspect its full text and Jev's reason. Inspected
+entries are display-only and are never included in future model context. The
+legacy `removed` command remains an alias for `inspect`.
 
 ## Cost
 
