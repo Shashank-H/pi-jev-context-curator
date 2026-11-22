@@ -16,10 +16,11 @@ export function createStats(): SessionStats {
 
 /**
  * Record one Jev call. Only input tokens are billed (outputs are free).
- * Returns the estimated cost of this call in USD.
+ * Returns the estimated cost of this call in USD. Self-hosted calls are not
+ * TypeSafe-billed (`billed = false`): tokens are tracked, API cost stays $0.
  */
-export function recordCall(stats: SessionStats, inputTokens: number): number {
-	const callCost = (inputTokens / 1_000_000) * JEV_USD_PER_MTOK_INPUT;
+export function recordCall(stats: SessionStats, inputTokens: number, billed = true): number {
+	const callCost = billed ? (inputTokens / 1_000_000) * JEV_USD_PER_MTOK_INPUT : 0;
 	stats.calls += 1;
 	stats.inputTokens += inputTokens;
 	stats.costUsd += callCost;
@@ -103,7 +104,10 @@ export function recordCuration(
 	r.lastRemovedTokens = removedTokens;
 }
 
-export function formatStatsSummary(cost: SessionStats, r: RemovalStats): string {
+/** Cost wording for self-hosted mode: zero API billing is not zero compute cost. */
+export const LOCAL_COST_NOTE = "$0 API-billed (self-hosted; your own compute is not metered)";
+
+export function formatStatsSummary(cost: SessionStats, r: RemovalStats, selfHosted = false): string {
 	const keptMessages = r.lastTotalMessages - r.lastRemovedMessages;
 	const keptTokens = r.lastTotalTokens - r.lastRemovedTokens;
 	return (
@@ -113,6 +117,8 @@ export function formatStatsSummary(cost: SessionStats, r: RemovalStats): string 
 		`  discarded by new judgments: ${r.messagesRemoved} messages (~${formatTokens(r.tokensRemoved)} tokens)\n` +
 		`  last context: ${r.lastTotalMessages} messages (~${formatTokens(r.lastTotalTokens)} tokens) ` +
 		`-> kept ${keptMessages} (~${formatTokens(keptTokens)})\n` +
-		`  jev: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens, cost ${formatUsd(cost.costUsd)}`
+		(selfHosted
+			? `  openjev-local: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens (as reported by the server), cost ${LOCAL_COST_NOTE}`
+			: `  jev: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens, cost ${formatUsd(cost.costUsd)}`)
 	);
 }

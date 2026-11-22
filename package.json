@@ -40,7 +40,8 @@
   "version": "1.1.1-beta.4",
   "scripts": {
     "pack:check": "npm pack --dry-run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "CURATOR_JEV_CONFIG=/nonexistent/x.json node --test test/*.test.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

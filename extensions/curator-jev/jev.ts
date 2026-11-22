@@ -13,10 +13,11 @@
 
 import {
 	JEV_TIMEOUT_MS,
-	MAX_STATE_TOKENS,
+	LOCAL_TIMEOUT_MS,
 	MAX_UNIT_CHARS,
 	type CuratorConfig,
 } from "./config.ts";
+import { readoutAnswers } from "./readout.ts";
 import { estimateTokens, type Unit } from "./units.ts";
 
 interface JevQuestion {
@@ -70,13 +71,17 @@ function truncate(s: string, maxChars: number): string {
  * Returns the decision, or `null` on any failure — the caller must fail
  * open (keep everything, record nothing) when this returns null.
  *
+ * Auth is decided by `cfg.provider`: hosted sends `apiKey` as a bearer token;
+ * `openjev-local` sends no credentials at all (the key is ignored) and only
+ * to a validated loopback endpoint.
+ *
  * Units that do not fit Jev's state token budget are left out of `judged`
  * so the caller leaves them unjudged for the next event instead of
  * permanently keeping them without a decision.
  */
 export async function askJev(
 	newUnits: Unit[],
-	apiKey: string,
+	apiKey: string | undefined,
 	cfg: CuratorConfig,
 	signal: AbortSignal | undefined,
 ): Promise<JevDecision | null> {
@@ -87,7 +92,7 @@ export async function askJev(
 	// Newest units first within the state budget; the rest stay unjudged
 	// for the next event. The newest unit is always included so we make
 	// progress even if a single unit exceeds the budget on its own.
-	const maxChars = MAX_STATE_TOKENS * 4;
+	const maxChars = cfg.maxStateTokens * 4;
 	const selected: number[] = [];
 	let used = 0;
 	for (let i = newUnits.length - 1; i >= 0; i--) {
@@ -151,27 +156,33 @@ export async function askJev(
 		};
 	}
 
+	const local = cfg.provider === "openjev-local";
+	if (local ? cfg.endpointError : !apiKey) return null; // never send without valid auth config
+
 	const ctrl = new AbortController();
-	const timer = setTimeout(() => ctrl.abort(new Error("Jev request timed out")), JEV_TIMEOUT_MS);
+	const timer = setTimeout(() => ctrl.abort(new Error("Jev request timed out")), local ? LOCAL_TIMEOUT_MS : JEV_TIMEOUT_MS);
 	try {
 		if (signal?.aborted) ctrl.abort(signal.reason);
 		else signal?.addEventListener("abort", () => ctrl.abort(signal.reason), { once: true });
 
-		const res = await fetch(`${cfg.baseUrl}/v1/systemone`, {
-			method: "POST",
-			signal: ctrl.signal,
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${apiKey}`,
-			},
-			body: JSON.stringify({ state: stateText, model: cfg.model, questions }),
-		});
-
-		if (!res.ok) {
-			if (res.status === 429 || res.status === 529) return null; // rate-limited/overloaded: fail open
-			throw new Error(`Jev API returned HTTP ${res.status}`);
+		let data: JevResponse;
+		if (local) {
+			const r = await readoutAnswers(stateText, questions, cfg, ctrl.signal);
+			if (!r) return null;
+			data = r;
+		} else {
+			const res = await fetch(`${cfg.baseUrl}/v1/systemone`, {
+				method: "POST",
+				signal: ctrl.signal,
+				headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+				body: JSON.stringify({ state: stateText, model: cfg.model, questions }),
+			});
+			if (!res.ok) {
+				if (res.status === 429 || res.status === 529) return null; // rate-limited/overloaded: fail open
+				throw new Error(`Jev API returned HTTP ${res.status}`);
+			}
+			data = (await res.json()) as JevResponse;
 		}
-		const data = (await res.json()) as JevResponse;
 		if (!data.answers) throw new Error("Jev response had no answers");
 
 		const keep = new Set<number>();
@@ -179,9 +190,9 @@ export async function askJev(
 		for (const i of selected) {
 			const ans = data.answers[`u${i}`];
 			const p = ans?.noul;
-			// Keep on yes (>= threshold), and on any non-numeric/missing
+			// Keep on yes (>= threshold), and on any missing/non-numeric/out-of-range
 			// answer: never discard on an undecided question.
-			if (typeof p !== "number" || p >= cfg.threshold) keep.add(i);
+			if (typeof p !== "number" || !(p >= 0 && p <= 1) || p >= cfg.threshold) keep.add(i);
 
 			const options = keep.has(i) ? KEEP_REASONS : REMOVAL_REASONS;
 			const choiceKey = keep.has(i) ? `why_keep_${i}` : `why_remove_${i}`;
