@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, it } from "node:test";
 import { checkLoopbackUrl, loadConfig, type CuratorConfig } from "../extensions/curator-jev/config.ts";
 import { askJev } from "../extensions/curator-jev/jev.ts";
@@ -6,7 +11,7 @@ import { createStats, formatStatsSummary, recordCall } from "../extensions/curat
 import { fingerprintUnit, groupIntoUnits, type Unit } from "../extensions/curator-jev/units.ts";
 import { JudgmentCheckpoint } from "../extensions/curator-jev/checkpoint.ts";
 
-const ENV_KEYS = ["CURATOR_JEV_PROVIDER", "OPENJEV_BASE_URL", "TYPESAFE_BASE_URL", "JEV_MODEL"];
+const ENV_KEYS = ["CURATOR_JEV_PROVIDER", "SEMIF_BASE_URL", "TYPESAFE_BASE_URL", "JEV_MODEL"];
 const realFetch = globalThis.fetch;
 const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 afterEach(() => {
@@ -23,7 +28,7 @@ const cfgFor = (env: Record<string, string> = {}): CuratorConfig => {
 	Object.assign(process.env, env);
 	return loadConfig();
 };
-const local = (url?: string) => cfgFor({ CURATOR_JEV_PROVIDER: "openjev-local", ...(url ? { OPENJEV_BASE_URL: url } : {}) });
+const local = (url?: string) => cfgFor({ CURATOR_JEV_PROVIDER: "semif", ...(url ? { SEMIF_BASE_URL: url } : {}) });
 
 interface Call { url: string; init: RequestInit }
 function stubFetch(respond: (call: Call) => Response | Promise<Response>): Call[] {
@@ -60,16 +65,41 @@ describe("config / endpoint safety", () => {
 		assert.equal(c.maxStateTokens, 28000);
 		assert.equal(c.endpointError, undefined);
 	});
-	it("openjev-local uses loopback default, openjev model, smaller state budget", () => {
+	it("persists tuning settings; env vars take precedence", () => {
+		const dir = mkdtempSync(join(tmpdir(), "curator-jev-"));
+		try {
+			const configFile = join(dir, "settings.json");
+			const keystore = pathToFileURL(join(process.cwd(), "extensions/curator-jev/keystore.ts")).href;
+			const config = pathToFileURL(join(process.cwd(), "extensions/curator-jev/config.ts")).href;
+			const script = `
+				const store = await import(${JSON.stringify(keystore)});
+				const config = await import(${JSON.stringify(config)});
+				store.persistUserSettings({ frequency: 2, minTokens: 12000, threshold: 0.7 });
+				const saved = config.loadConfig();
+				process.env.CURATOR_JEV_FREQUENCY = "4";
+				process.env.CURATOR_JEV_MIN_TOKENS = "16000";
+				process.env.CURATOR_JEV_THRESHOLD = "0.8";
+				const overridden = config.loadConfig();
+				console.log(JSON.stringify([saved.frequency, saved.minTokens, saved.threshold, overridden.frequency, overridden.minTokens, overridden.threshold]));
+			`;
+			const env: NodeJS.ProcessEnv = { ...process.env, CURATOR_JEV_CONFIG: configFile };
+			for (const key of ["CURATOR_JEV_PROVIDER", "CURATOR_JEV_THRESHOLD", "CURATOR_JEV_MIN_TOKENS", "CURATOR_JEV_FREQUENCY"]) delete env[key];
+			const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), env });
+			assert.deepEqual(JSON.parse(output.toString()), [2, 12000, 0.7, 4, 16000, 0.8]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	it("semif uses loopback default, local model, smaller state budget", () => {
 		const c = local();
-		assert.equal(c.provider, "openjev-local");
+		assert.equal(c.provider, "semif");
 		assert.equal(c.baseUrl, "http://127.0.0.1:3000");
-		assert.equal(c.model, "openjev");
+		assert.equal(c.model, "semif");
 		assert.ok(c.maxStateTokens <= 12000);
 		assert.equal(c.endpointError, undefined);
 	});
 	it("ignores TYPESAFE_BASE_URL in local mode", () => {
-		const c = cfgFor({ CURATOR_JEV_PROVIDER: "openjev-local", TYPESAFE_BASE_URL: "https://evil.example" });
+		const c = cfgFor({ CURATOR_JEV_PROVIDER: "semif", TYPESAFE_BASE_URL: "https://evil.example" });
 		assert.equal(c.baseUrl, "http://127.0.0.1:3000");
 	});
 	it("accepts only explicit loopback http(s) hosts", () => {
@@ -92,7 +122,7 @@ describe("config / endpoint safety", () => {
 			assert.ok(checkLoopbackUrl(bad), bad);
 		}
 	});
-	it("remote / malformed OPENJEV_BASE_URL sets endpointError", () => {
+	it("remote / malformed SEMIF_BASE_URL sets endpointError", () => {
 		assert.ok(local("https://api.example.com").endpointError);
 		assert.ok(local("garbage").endpointError);
 	});
@@ -118,7 +148,7 @@ describe("askJev: hosted", () => {
 	});
 });
 
-describe("askJev: openjev-local", () => {
+describe("askJev: semif", () => {
 	it("makes keyless request to loopback; never leaks a supplied TypeSafe key", async () => {
 		const c = local();
 		const calls = stubFetch(llama(0.05, 0));
@@ -227,7 +257,7 @@ describe("stats / accounting", () => {
 		assert.equal(s.costUsd, 0);
 		assert.equal(s.inputTokens, 1_000_000);
 		const r = formatStatsSummary(s, { unitsJudged: 0, unitsRemoved: 0, messagesRemoved: 0, tokensRemoved: 0, sessionSavedMessages: 0, sessionSavedTokens: 0, lastTotalMessages: 0, lastTotalTokens: 0, lastRemovedMessages: 0, lastRemovedTokens: 0 }, true);
-		assert.match(r, /openjev-local/);
+		assert.match(r, /semif/);
 		assert.match(r, /not metered/);
 		assert.doesNotMatch(r, /TypeSafe/);
 	});

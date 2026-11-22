@@ -12,7 +12,7 @@
  * messages are always preserved.
  *
  * Wiring only — the real work lives in the sibling modules:
- *   config.ts      env-based configuration
+ *   config.ts      configuration
  *   keystore.ts    API key resolution + persistence
  *   units.ts       message introspection + grouping into units
  *   checkpoint.ts  content-addressed record of judged units
@@ -22,7 +22,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { applyProvider, checkLoopbackUrl, isLocalMode, loadConfig, TAG } from "./config.ts";
+import { applyProvider, checkLoopbackUrl, isSemifMode, loadConfig, TAG } from "./config.ts";
 import { clearTokenCache } from "./readout.ts";
 import {
 	confirmText,
@@ -30,6 +30,7 @@ import {
 	findModel,
 	freeLoopbackUrl,
 	hasLlamaServer,
+	managedServerUrl,
 	inspectServer,
 	isInstalled,
 	LLAMA_INSTALL,
@@ -48,6 +49,7 @@ import {
 	persistLocalBaseUrl,
 	persistMode,
 	persistModel,
+	persistUserSettings,
 	resolveApiKey,
 } from "./keystore.ts";
 import {
@@ -111,7 +113,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 	let enabled = process.env.CURATOR_JEV_ENABLED !== "0";
 	let sessionApiKey: string | undefined;
 	let warnedNoKey = false;
-	let selfHosted = cfg.provider === "openjev-local";
+	let selfHosted = cfg.provider === "semif";
 	const semif = new SemifServer();
 	let activeSemifModel: SemifModel | undefined;
 	let settingUp = false;
@@ -126,10 +128,10 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		const say = (m: string, lvl: "info" | "warning" | "error" = "info") => ctx.ui.notify(`[${TAG}] ${m}`, lvl);
 		const activate = (m?: SemifModel, baseUrl?: string) => {
 			clearTokenCache();
-			applyProvider(cfg, "openjev-local");
+			applyProvider(cfg, "semif");
 			if (baseUrl) {
 				cfg.baseUrl = baseUrl;
-				if (!process.env.OPENJEV_BASE_URL) persistLocalBaseUrl(baseUrl);
+				if (!process.env.SEMIF_BASE_URL) persistLocalBaseUrl(baseUrl);
 			}
 			selfHosted = true;
 			activeSemifModel = m;
@@ -141,9 +143,10 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		const generation = ++setupGeneration;
 		const requestedModel = findModel(modelArg);
 		if (modelArg && !requestedModel) return say(`unknown model "${modelArg}" — choose one of: ${MODELS.map((m) => m.id).join(", ")}`, "warning");
-		let url = (process.env.OPENJEV_BASE_URL || loadLocalBaseUrl() || "http://127.0.0.1:3000").replace(/\/+$/, "");
+		let url = (process.env.SEMIF_BASE_URL || loadLocalBaseUrl() || "http://127.0.0.1:3000").replace(/\/+$/, "");
 		const rejected = checkLoopbackUrl(url);
-		if (rejected) return say(`OPENJEV_BASE_URL rejected: ${rejected}`, "error");
+		if (rejected) return say(`SEMIF_BASE_URL rejected: ${rejected}`, "error");
+		url = managedServerUrl(url) ?? url;
 		const existing = await inspectServer(url, interactive ? 5000 : 2000);
 		if (generation !== setupGeneration) return;
 		const runningModel = findModel(existing.modelId);
@@ -158,14 +161,17 @@ export default function curatorJev(pi: ExtensionAPI): void {
 			return say(`${runningModel.name} server is still loading at ${url}; wait, then rerun mode semif.`, "warning");
 		}
 		if (existing.listening) {
-			if (process.env.OPENJEV_BASE_URL) {
-				return say(`OPENJEV_BASE_URL is occupied by an unknown or unsupported server at ${url}; stop it or set OPENJEV_BASE_URL to a free loopback port. No context was sent.`, "error");
+			if (process.env.SEMIF_BASE_URL) {
+				return say(`SEMIF_BASE_URL is occupied by an unknown or unsupported server at ${url}; stop it or set SEMIF_BASE_URL to a free loopback port. No context was sent.`, "error");
 			}
 			const occupiedUrl = url;
 			url = await freeLoopbackUrl();
 			if (generation !== setupGeneration) return;
 			say(`Port at ${occupiedUrl} belongs to another service; using free loopback port ${url}.`);
 		}
+		const launchUrl = managedServerUrl(url);
+		if (!launchUrl) return say(`SemIf can launch only on a plain HTTP loopback origin (for example http://127.0.0.1:3000); ${url} is not supported for managed startup.`, "warning");
+		url = launchUrl;
 		if (!hasLlamaServer()) {
 			return say(`no server at ${url} and llama-server is not installed. Install: ${LLAMA_INSTALL}, then run \`mode semif\`. Staying on current mode.`, "warning");
 		}
@@ -191,7 +197,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 		settingUp = true;
 		say(isInstalled(chosen) ? `starting ${chosen.name}…` : `downloading ${chosen.name} in the background; curation switches over when ready`);
 		void semif
-			.start(chosen, url, (m) => ctx.ui.setStatus("semif", m), process.env.OPENJEV_BASE_URL ? undefined : async () => {
+			.start(chosen, url, (m) => ctx.ui.setStatus("semif", m), process.env.SEMIF_BASE_URL ? undefined : async () => {
 				const occupiedUrl = url;
 				url = await freeLoopbackUrl();
 				say(`Port at ${occupiedUrl} was claimed during startup; retrying at ${url}.`);
@@ -313,9 +319,9 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				{ value: "clear-key", description: "Clear the stored API key" },
 				{ value: "cost", description: "Show session cost" },
 				{ value: "reset", description: "Reset the judgment checkpoint" },
-				{ value: "threshold", description: "Set the keep threshold" },
-				{ value: "min-tokens", description: "Set the minimum context size" },
-				{ value: "frequency", description: "Set the Jev query frequency" },
+				{ value: "threshold", description: "Set and save the keep threshold" },
+				{ value: "min-tokens", description: "Set and save the context token floor" },
+				{ value: "frequency", description: "Set and save query frequency" },
 			];
 			const filtered = subcommands.filter((command) => command.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered.map((command) => ({ ...command, label: command.value })) : null;
@@ -344,7 +350,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						warnedNoKey = false;
 						persistMode("typesafe");
 						ctx.ui.notify(`[${TAG}] mode typesafe — hosted Jev (local server stopped if pi started it)`, "info");
-					} else if (isLocalMode(want.split(/\s+/)[0])) {
+					} else if (isSemifMode(want.split(/\s+/)[0])) {
 						await goLocal(ctx, true, want.split(/\s+/)[1]);
 					} else {
 						ctx.ui.notify(`[${TAG}] usage: /jev-context-curator mode typesafe|semif`, "warning");
@@ -433,7 +439,8 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						break;
 					}
 					cfg.threshold = n;
-					ctx.ui.notify(`[${TAG}] keep threshold set to ${n}`, "info");
+					persistUserSettings({ threshold: n });
+					ctx.ui.notify(`[${TAG}] keep threshold saved as ${n}`, "info");
 					break;
 				}
 				case "min-tokens": {
@@ -443,7 +450,8 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						break;
 					}
 					cfg.minTokens = n;
-					ctx.ui.notify(`[${TAG}] min tokens set to ${n}`, "info");
+					persistUserSettings({ minTokens: n });
+					ctx.ui.notify(`[${TAG}] minimum tokens saved as ${n}`, "info");
 					break;
 				}
 				case "frequency": {
@@ -453,7 +461,8 @@ export default function curatorJev(pi: ExtensionAPI): void {
 						break;
 					}
 					cfg.frequency = n;
-					ctx.ui.notify(`[${TAG}] Jev queries now run every ${n} context calls`, "info");
+					persistUserSettings({ frequency: n });
+					ctx.ui.notify(`[${TAG}] query frequency saved as every ${n} context calls`, "info");
 					break;
 				}
 				default:
@@ -478,7 +487,7 @@ export default function curatorJev(pi: ExtensionAPI): void {
 				warnedNoKey = true;
 				ctx.ui.notify(
 					selfHosted
-						? `[${TAG}] OPENJEV_BASE_URL rejected: ${cfg.endpointError} — context passes through uncurated.`
+						? `[${TAG}] SEMIF_BASE_URL rejected: ${cfg.endpointError} — context passes through uncurated.`
 						: `[${TAG}] No TypeSafe API key — context passes through uncurated. Run /jev-context-curator set-key <key> or set TYPESAFE_API_KEY.`,
 					"warning",
 				);

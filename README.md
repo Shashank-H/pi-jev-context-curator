@@ -18,7 +18,7 @@ Because each unit is judged once, the per-turn Jev cost stays tiny (usually 1–
 
 ## Safety: fail-open by design
 
-- **No API key** → context passes through untouched (one warning per session).
+- **No API key in hosted mode** → context passes through untouched (one warning per session). SemIf local mode needs no key.
 - **Any Jev API error / timeout / rate-limit** → context passes through untouched, and the new units are retried on the next event (nothing is recorded).
 - **The primary `noul` answer controls keep/remove**; reason probes only explain the decision and never override it. Missing/non-numeric primary answers are kept. Summaries—including summaries created earlier—are explicitly protected by the prompt.
 - **System messages are always kept** (they define tools and prompt sections) and are never judged.
@@ -69,18 +69,18 @@ modules are imported relatively and are never loaded as extensions themselves.
 |---|---|---|
 | `TYPESAFE_API_KEY` | — | API key from `console.typesafe.ai/settings/keys` for hosted mode; SemIf local mode does not need one. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Override for proxies/mirrors. |
-| `CURATOR_JEV_PROVIDER` | `typesafe` | Set to `openjev-local` to force SemIf local mode (no API key). Prefer `/jev-context-curator mode semif`. See [Self-hosted SemIf](#self-hosted-semif-formerly-openjev). |
-| `OPENJEV_BASE_URL` | `http://127.0.0.1:3000` | SemIf `llama-server` URL; only used in local mode. Must be loopback (`127.0.0.1`, `localhost`, `[::1]`). |
-| `JEV_MODEL` | `jev-latest` (`openjev` in local mode) | Jev model alias or pinned version. |
-| `CURATOR_JEV_THRESHOLD` | `0.4` | Keep a unit when Jev's "needed" probability ≥ this. Lower is more conservative and keeps more context. |
-| `CURATOR_JEV_MIN_TOKENS` | `8000` | Only curate above this estimated context size. |
-| `CURATOR_JEV_FREQUENCY` | `5` | Run a new Jev query every Nth context/model call; `3` means every third call. |
+| `CURATOR_JEV_PROVIDER` | `typesafe` | Set to `semif` to force local mode (no API key). Prefer `/jev-context-curator mode semif`. See [Self-hosted SemIf](#self-hosted-semif). |
+| `SEMIF_BASE_URL` | `http://127.0.0.1:3000` | SemIf URL; must be loopback. Managed launch uses plain HTTP origin; omitted port defaults to `3000`. |
+| `JEV_MODEL` | `jev-latest` (`semif` in local mode) | Jev model alias or pinned version. |
+| `CURATOR_JEV_THRESHOLD` | `0.4` | Keep a unit when Jev's "needed" probability ≥ this. Lower is more conservative and keeps more context; env overrides saved settings. |
+| `CURATOR_JEV_MIN_TOKENS` | `8000` | Only curate above this estimated context size; env overrides saved settings. |
+| `CURATOR_JEV_FREQUENCY` | `5` | Run a new Jev query every Nth context/model call; `3` means every third call; env overrides saved settings. |
 | `CURATOR_JEV_ENABLED` | `1` | Set to `0` to start disabled. |
 | `CURATOR_JEV_DEBUG` | — | Set to `1` for per-turn curation logs. |
 
 > **Note:** as of September 2026, TypeSafe AI's direct API is in **waitlisted early access** — hosted mode needs an approved key from `console.typesafe.ai`. Without one, hosted mode passes context through unchanged; SemIf local mode is available without a key.
 
-## Self-hosted SemIf (formerly OpenJev)
+## Self-hosted SemIf
 
 Optional **mode** that runs the judge on a small open model on your own machine via [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`, instead of hosted TypeSafe. No TypeSafe key is read or sent. **Default is `typesafe` until you switch.**
 
@@ -91,30 +91,30 @@ Optional **mode** that runs the judge on a small open model on your own machine 
 /jev-context-curator mode typesafe              # back to hosted; stops the server pi started
 ```
 
-Models ([openjev.com](https://openjev.com/) measurements; hosted Jev is 88.3% on the same TypeSafe set):
+Published model measurements (hosted Jev scores 88.3% on the TypeSafe set):
 
-| Model | Download | Authored | Agreement with TypeSafe |
-|---|---|---|---|
-| `minicpm5-2b` MiniCPM5 2B | 1.56 GB | 68.6% | 63.7% |
-| `qwen3.5-4b` Qwen3.5 4B | 3.01 GB | 81.3% | 84.5% |
+| Model | Download | Authored | Perturbed | TypeSafe agreement |
+|---|---|---|---|---|
+| `minicpm5-2b` MiniCPM5 2B | 1.56 GB | 68.6% | 69.3% | 63.7% |
+| `qwen3.5-4b` Qwen3.5 4B | 3.01 GB | 81.3% | 76.6% | 84.5% |
 
 The picker marks one as **recommended** for your RAM (4B at 16 GB+, otherwise 2B). You choose.
 
 `mode semif` does, in order:
 1. **Detect safely:** reuse a server only if `/v1/models` identifies one of the supported model IDs (`minicpm5-2b` or `qwen3.5-4b`). A generic `/health` response is not enough. Manually launched servers need `--alias` set to the matching ID.
-2. **Avoid collisions:** if the default loopback port is occupied by another service, automatically choose and remember a free loopback port. If you explicitly set `OPENJEV_BASE_URL` and that endpoint is occupied by an unknown model/service, stop or move it; no context is sent there.
+2. **Avoid collisions:** if the default loopback port is occupied by another service, automatically choose and remember a free loopback port. If you explicitly set `SEMIF_BASE_URL` and that endpoint is occupied by an unknown model/service, stop or move it; no context is sent there.
 3. **Pick + confirm:** otherwise (needs `llama-server` installed, e.g. `brew install llama.cpp`) choose a model; already-downloaded ones are marked. Confirm before downloading.
 4. **Launch:** weights go to `~/.pi/curator-jev/semif/models` (pinned GGUF, resumable), then `llama-server` starts on loopback in the background (log: `server.log`). Pi verifies the model ID before switching curation over. Failure leaves current mode.
 
-The mode, model, and automatically selected port are saved. On startup a saved `semif` mode reuses a verified server or starts the already-downloaded model; it never downloads without asking. The server pi started is stopped when pi exits. `CURATOR_JEV_PROVIDER=openjev-local` also forces local mode via env.
+The mode, model, and automatically selected port are saved. On startup a saved `semif` mode reuses a verified server or starts the already-downloaded model; it never downloads without asking. The server pi started is stopped when pi exits. `CURATOR_JEV_PROVIDER=semif` also forces local mode via env.
 
-- **How it judges:** each keep/remove question is answered from the model's option-letter logprobs (one token), not generated text. This is the same readout idea openjev.com describes, re-implemented over llama-server; it is not hosted Jev's exact path.
+- **How it judges:** each keep/remove question is answered from the model's option-letter logprobs (one token), not generated text. This local readout runs over llama-server; it is not hosted Jev's exact path.
 - **Loopback only:** non-loopback/malformed URLs, URL credentials and redirects are refused; context then passes through untouched.
 - **Failure behavior:** server down, timeout, bad response → affected context is kept and retried later.
 - **Request size:** local sends a ~4k-token `state` per call (server context 8192) vs 28k hosted.
 - **Cost:** `$0 API-billed`; your own compute is not metered.
 - **Licenses:** weights are third-party; check each model's license on Hugging Face.
-- **Verification:** automated tests stub HTTP; the real llama-server and MiniCPM5 2B readout were also smoke-tested on Apple silicon. Qwen download and comparative model quality were not tested here.
+- **Verification:** automated tests stub HTTP; the real llama-server and MiniCPM5 2B readout were smoke-tested on Apple silicon. Qwen inference was not tested here.
 
 ## API keys
 
@@ -141,6 +141,8 @@ Run `/jev-context-curator clear-key` to remove the key from both the session and
 /jev-context-curator min-tokens 12000  # raise the token floor
 /jev-context-curator frequency 3       # query Jev every third context/model call
 ```
+
+`threshold`, `min-tokens`, and `frequency` save to `~/.pi/curator-jev.json` and persist across sessions. Their matching `CURATOR_JEV_*` env vars override saved settings at startup.
 
 ## Removal stats
 

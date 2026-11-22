@@ -1,6 +1,6 @@
-/** Shared constants and environment-based configuration for curator-jev. */
+/** Shared constants and configuration for curator-jev. */
 
-import { loadLocalBaseUrl, loadPersistedMode } from "./keystore.ts";
+import { loadLocalBaseUrl, loadPersistedMode, loadUserSettings } from "./keystore.ts";
 
 export const TAG = "jev-context-curator";
 
@@ -8,7 +8,7 @@ export const DEFAULT_BASE_URL = "https://api.typesafe.ai";
 export const DEFAULT_MODEL = "jev-latest";
 /** Local SemIf: llama.cpp `llama-server` on loopback (see semif.ts / readout.ts). */
 export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:3000";
-export const DEFAULT_LOCAL_MODEL = "openjev";
+export const DEFAULT_LOCAL_MODEL = "semif";
 // Conservative default: preserve useful context unless Jev is fairly confident
 // that it is clearly disposable.
 export const DEFAULT_THRESHOLD = 0.4;
@@ -32,10 +32,10 @@ export const LOCAL_TIMEOUT_MS = 60000;
 /** Jev pricing: $42 per billion input tokens; outputs are free. */
 export const JEV_USD_PER_MTOK_INPUT = 0.042;
 
-export type Provider = "typesafe" | "openjev-local";
+export type Provider = "typesafe" | "semif";
 
 export interface CuratorConfig {
-	/** `typesafe` (hosted, API key required) or `openjev-local` (explicit loopback server, no key). */
+	/** `typesafe` (hosted, API key required) or `semif` (loopback server, no key). */
 	provider: Provider;
 	baseUrl: string;
 	/** Why the endpoint is unusable (local mode only); curation passes through while set. */
@@ -74,16 +74,15 @@ export function checkLoopbackUrl(raw: string): string | undefined {
 	return undefined;
 }
 
-/** Mode names that select the self-hosted server (SemIf, formerly OpenJev). Anything else is hosted. */
-export const isLocalMode = (v: string | undefined): boolean =>
-	v !== undefined && ["semif", "openjev", "openjev-local"].includes(v.toLowerCase());
+/** Only `semif` selects the self-hosted server; anything else is hosted. */
+export const isSemifMode = (v: string | undefined): boolean => v?.toLowerCase() === "semif";
 
 /** Switch an existing config between hosted and self-hosted (runtime `mode` command). */
 export function applyProvider(cfg: CuratorConfig, provider: Provider): void {
-	const local = provider === "openjev-local";
+	const local = provider === "semif";
 	cfg.provider = provider;
 	cfg.baseUrl = (
-		local ? process.env.OPENJEV_BASE_URL || loadLocalBaseUrl() || DEFAULT_LOCAL_BASE_URL : process.env.TYPESAFE_BASE_URL || DEFAULT_BASE_URL
+		local ? process.env.SEMIF_BASE_URL || loadLocalBaseUrl() || DEFAULT_LOCAL_BASE_URL : process.env.TYPESAFE_BASE_URL || DEFAULT_BASE_URL
 	).replace(/\/+$/, "");
 	cfg.endpointError = local ? checkLoopbackUrl(cfg.baseUrl) : undefined;
 	cfg.maxStateTokens = local ? LOCAL_MAX_STATE_TOKENS : MAX_STATE_TOKENS;
@@ -91,21 +90,22 @@ export function applyProvider(cfg: CuratorConfig, provider: Provider): void {
 }
 
 export function loadConfig(): CuratorConfig {
-	const threshold = Number.parseFloat(process.env.CURATOR_JEV_THRESHOLD ?? "");
-	const minTokens = Number.parseInt(process.env.CURATOR_JEV_MIN_TOKENS ?? "", 10);
-	const frequency = Number.parseInt(process.env.CURATOR_JEV_FREQUENCY ?? "", 10);
-	const local = isLocalMode(process.env.CURATOR_JEV_PROVIDER ?? loadPersistedMode());
+	const saved = loadUserSettings();
+	const threshold = Number.parseFloat(process.env.CURATOR_JEV_THRESHOLD ?? String(saved.threshold ?? ""));
+	const minTokens = Number.parseInt(process.env.CURATOR_JEV_MIN_TOKENS ?? String(saved.minTokens ?? ""), 10);
+	const frequency = Number.parseInt(process.env.CURATOR_JEV_FREQUENCY ?? String(saved.frequency ?? ""), 10);
+	const local = isSemifMode(process.env.CURATOR_JEV_PROVIDER ?? loadPersistedMode());
 	const baseUrl = (
-		local ? process.env.OPENJEV_BASE_URL || loadLocalBaseUrl() || DEFAULT_LOCAL_BASE_URL : process.env.TYPESAFE_BASE_URL || DEFAULT_BASE_URL
+		local ? process.env.SEMIF_BASE_URL || loadLocalBaseUrl() || DEFAULT_LOCAL_BASE_URL : process.env.TYPESAFE_BASE_URL || DEFAULT_BASE_URL
 	).replace(/\/+$/, "");
 	return {
-		provider: local ? "openjev-local" : "typesafe",
+		provider: local ? "semif" : "typesafe",
 		baseUrl,
 		endpointError: local ? checkLoopbackUrl(baseUrl) : undefined,
 		maxStateTokens: local ? LOCAL_MAX_STATE_TOKENS : MAX_STATE_TOKENS,
 		model: process.env.JEV_MODEL || (local ? DEFAULT_LOCAL_MODEL : DEFAULT_MODEL),
 		threshold: Number.isFinite(threshold) ? Math.min(1, Math.max(0, threshold)) : DEFAULT_THRESHOLD,
-		minTokens: Number.isFinite(minTokens) && minTokens > 0 ? minTokens : DEFAULT_MIN_TOKENS,
+		minTokens: Number.isFinite(minTokens) && minTokens >= 0 ? minTokens : DEFAULT_MIN_TOKENS,
 		frequency: Number.isFinite(frequency) && frequency > 0 ? frequency : DEFAULT_FREQUENCY,
 		debug: process.env.CURATOR_JEV_DEBUG === "1",
 	};

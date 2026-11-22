@@ -1,7 +1,7 @@
 /**
  * Local "direct readout" backend (SemIf): answers Jev-style questions from a
  * llama.cpp `llama-server` by reading option-letter logprobs for ONE generated
- * token, softmaxed over just the allowed options (same method as openjev.com).
+ * token, softmaxed over just the allowed options.
  * Local only: no key, loopback only, redirects refused.
  */
 
@@ -45,6 +45,7 @@ async function letterId(cfg: CuratorConfig, l: string, signal: AbortSignal): Pro
 }
 
 export function softmax(xs: number[]): number[] {
+	if (xs.length === 0 || xs.some((x) => !Number.isFinite(x))) throw new Error("invalid logits");
 	const m = Math.max(...xs);
 	const e = xs.map((x) => Math.exp(x - m));
 	const t = e.reduce((a, b) => a + b, 0);

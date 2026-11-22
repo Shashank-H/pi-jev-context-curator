@@ -1,5 +1,5 @@
 /**
- * SemIf (formerly OpenJev) local mode: small open models served by llama.cpp's
+ * SemIf local mode: small open models served by llama.cpp's
  * `llama-server` on loopback, read out with direct logprobs (readout.ts).
  * Flow: detect running server -> pick model (recommended, user chooses) ->
  * confirm download -> download -> launch -> wait healthy. Stops with pi.
@@ -21,11 +21,12 @@ export interface SemifModel {
 	id: string;
 	name: string;
 	sizeGb: number;
-	/** Pinned GGUF (Q4_K_M / Q8_0 builds used by openjev.com). */
+	/** Pinned upstream GGUF checkpoint. */
 	url: string;
 	file: string;
-	/** Published quality from openjev.com: balanced accuracy on authored set; agreement with TypeSafe on 102 public rows. */
+	/** Published benchmark percentages. */
 	authored: number;
+	perturbed: number;
 	typesafe: number;
 }
 
@@ -37,6 +38,7 @@ export const MODELS: SemifModel[] = [
 		url: "https://huggingface.co/openbmb/MiniCPM5-2B-GGUF/resolve/2079a22f3beaa4e306449978533478fe0522f4b3/MiniCPM5-2B-Q4_K_M.gguf",
 		file: "minicpm5-2b.gguf",
 		authored: 68.6,
+		perturbed: 69.3,
 		typesafe: 63.7,
 	},
 	{
@@ -46,12 +48,22 @@ export const MODELS: SemifModel[] = [
 		url: "https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/4168f45a16a1290d65a4ec0fa312ae917a4c15d6/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
 		file: "qwen3.5-4b.gguf",
 		authored: 81.3,
+		perturbed: 76.6,
 		typesafe: 84.5,
 	},
 ];
 
 export const findModel = (id: string | undefined) => MODELS.find((m) => m.id === id);
 export const modelPath = (m: SemifModel) => join(HOME, "models", m.file);
+
+/** Normalize URL to an origin the managed HTTP server can bind and reach. */
+export function managedServerUrl(raw: string): string | undefined {
+	const url = new URL(raw);
+	if (url.protocol !== "http:" || url.pathname !== "/" || url.search || url.hash) return undefined;
+	if (!url.port) url.port = "3000";
+	if (url.hostname === "localhost") url.hostname = "127.0.0.1";
+	return url.origin;
+}
 /** A finished download only exists under its final name (downloads go to .part first). */
 export const isInstalled = (m: SemifModel) => existsSync(modelPath(m));
 export const ramGb = () => Math.round(totalmem() / 2 ** 30);
@@ -64,7 +76,7 @@ export const hasLlamaServer = (): boolean => spawnSync("llama-server", ["--versi
 export function describe(m: SemifModel, rec: SemifModel, ram = ramGb()): string {
 	return [
 		`${m.name} — ${m.sizeGb} GB download`,
-		`quality ${m.authored}% authored / ${m.typesafe}% agreement with TypeSafe`,
+		`quality ${m.authored}% authored / ${m.perturbed}% perturbed / ${m.typesafe}% TypeSafe agreement`,
 		m.id === rec.id ? `recommended for your ${ram} GB machine` : undefined,
 		isInstalled(m) ? "already downloaded" : undefined,
 	]
@@ -77,7 +89,7 @@ export const confirmText = (m: SemifModel, baseUrl: string): string =>
 		`No SemIf server found at ${baseUrl}. Set up ${m.name} locally?`,
 		isInstalled(m) ? "  • model already downloaded — just starting llama-server" : `  • download ${m.name} (~${m.sizeGb} GB) to ${modelPath(m)}`,
 		"  • start llama-server on loopback only (stopped when pi exits)",
-		"Models are third-party weights; check their license on Hugging Face (openjev.com's lab models are not Jev).",
+		"Models are third-party weights; check their license on Hugging Face. They are not the hosted Jev model.",
 	].join("\n");
 
 /** True when a llama-server is up and finished loading its model. */
@@ -179,17 +191,25 @@ export class SemifServer {
 			if (generation !== this.generation) return fail("setup cancelled");
 			progress(`loading ${m.name}…`);
 			// -np 1: one slot gets the whole context; --jinja: chat template so thinking can be disabled.
+			const serverUrl = new URL(baseUrl);
+			const host = serverUrl.hostname === "[::1]" ? "::1" : serverUrl.hostname;
 			this.child = spawn(
 				"llama-server",
-				["-m", modelPath(m), "--alias", m.id, "--host", "127.0.0.1", "--port", new URL(baseUrl).port || "3000", "-c", "8192", "-np", "1", "-ngl", "999", "--jinja"],
+				["-m", modelPath(m), "--alias", m.id, "--host", host, "--port", serverUrl.port || "3000", "-c", "8192", "-np", "1", "-ngl", "999", "--jinja"],
 				{ stdio: ["ignore", logFd, logFd] },
 			);
 			let exited = false;
+			let launchError: Error | undefined;
+			this.child.once("error", (error) => {
+				launchError = error;
+				exited = true;
+			});
 			this.child.on("exit", () => (exited = true));
 			for (let waited = 0; waited < 180_000; waited += 2000) {
 				await new Promise((r) => setTimeout(r, 2000));
 				if (generation !== this.generation) return fail("setup cancelled");
 				if (exited) {
+					if (launchError) return fail(`could not start llama-server: ${launchError.message}`);
 					const info = await inspectServer(baseUrl, 2000);
 					if (generation !== this.generation) return fail("setup cancelled");
 					if (info.ready && info.modelId === m.id) return undefined;

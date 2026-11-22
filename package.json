@@ -41,7 +41,7 @@
   "scripts": {
     "pack:check": "npm pack --dry-run",
     "typecheck": "tsc --noEmit",
-    "test": "CURATOR_JEV_CONFIG=/nonexistent/x.json node --test test/*.test.ts"
+    "test": "CURATOR_JEV_CONFIG=/nonexistent/x.json node --test --test-concurrency=1 test/*.test.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

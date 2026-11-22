@@ -21,7 +21,13 @@ export interface ApiKeyResolution {
 	source: string;
 }
 
-type Persisted = { apiKey?: string; mode?: string; model?: string; localBaseUrl?: string };
+export interface UserSettings {
+	threshold?: number;
+	minTokens?: number;
+	frequency?: number;
+}
+
+type Persisted = { apiKey?: string; mode?: string; model?: string; localBaseUrl?: string; settings?: UserSettings };
 
 function readPersisted(): Persisted {
 	try {
@@ -67,6 +73,13 @@ export const persistModel = (model: string): void => writePersisted({ model });
 
 export const loadLocalBaseUrl = (): string | undefined => readPersisted().localBaseUrl;
 export const persistLocalBaseUrl = (localBaseUrl: string): void => writePersisted({ localBaseUrl });
+
+export const loadUserSettings = (): UserSettings => {
+	const settings = readPersisted().settings;
+	return settings && typeof settings === "object" ? settings : {};
+};
+export const persistUserSettings = (patch: UserSettings): void =>
+	writePersisted({ settings: { ...loadUserSettings(), ...patch } });
 
 export function resolveApiKey(sessionKey: string | undefined): ApiKeyResolution {
 	if (sessionKey) {

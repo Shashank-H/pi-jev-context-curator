@@ -72,7 +72,7 @@ function truncate(s: string, maxChars: number): string {
  * open (keep everything, record nothing) when this returns null.
  *
  * Auth is decided by `cfg.provider`: hosted sends `apiKey` as a bearer token;
- * `openjev-local` sends no credentials at all (the key is ignored) and only
+ * `semif` sends no credentials at all (the key is ignored) and only
  * to a validated loopback endpoint.
  *
  * Units that do not fit Jev's state token budget are left out of `judged`
@@ -156,7 +156,7 @@ export async function askJev(
 		};
 	}
 
-	const local = cfg.provider === "openjev-local";
+	const local = cfg.provider === "semif";
 	if (local ? cfg.endpointError : !apiKey) return null; // never send without valid auth config
 
 	const ctrl = new AbortController();

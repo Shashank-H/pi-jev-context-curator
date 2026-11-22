@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import { findModel, freeLoopbackUrl, inspectServer, MODELS, probe, recommend } from "../extensions/curator-jev/semif.ts";
+import { findModel, freeLoopbackUrl, inspectServer, managedServerUrl, MODELS, probe, recommend } from "../extensions/curator-jev/semif.ts";
 import { softmax } from "../extensions/curator-jev/readout.ts";
 
 test("recommend: 4B with headroom, 2B on small machines; user still picks any", () => {
@@ -12,9 +12,11 @@ test("recommend: 4B with headroom, 2B on small machines; user still picks any", 
 	assert.equal(MODELS.length, 2);
 });
 
-test("softmax sums to 1", () => {
+test("softmax sums to 1 and rejects invalid logits", () => {
 	const p = softmax([0, 0, 0, 0]);
 	assert.ok(Math.abs(p.reduce((a, b) => a + b) - 1) < 1e-9 && p[0] === 0.25);
+	assert.throws(() => softmax([]), /invalid logits/);
+	assert.throws(() => softmax([0, Number.NaN]), /invalid logits/);
 });
 
 test("identify only ready llama-server with supported model; detect other listeners", async () => {
@@ -38,6 +40,13 @@ test("identify only ready llama-server with supported model; detect other listen
 	assert.equal(await probe(unsupported.url, 2000), false);
 	ok.close(); loading.close(); other.close(); unsupported.close();
 	assert.deepEqual(await inspectServer("http://127.0.0.1:1", 500), { listening: false, ready: false });
+});
+
+test("managed server URLs are normalized to bindable HTTP loopback origins", () => {
+	assert.equal(managedServerUrl("http://localhost"), "http://127.0.0.1:3000");
+	assert.equal(managedServerUrl("http://[::1]:9876"), "http://[::1]:9876");
+	assert.equal(managedServerUrl("https://127.0.0.1:3000"), undefined);
+	assert.equal(managedServerUrl("http://127.0.0.1:3000/prefix"), undefined);
 });
 
 test("free loopback URL uses an ephemeral available port", async () => {

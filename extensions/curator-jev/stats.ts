@@ -118,7 +118,7 @@ export function formatStatsSummary(cost: SessionStats, r: RemovalStats, selfHost
 		`  last context: ${r.lastTotalMessages} messages (~${formatTokens(r.lastTotalTokens)} tokens) ` +
 		`-> kept ${keptMessages} (~${formatTokens(keptTokens)})\n` +
 		(selfHosted
-			? `  openjev-local: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens (as reported by the server), cost ${LOCAL_COST_NOTE}`
+			? `  semif: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens (as reported by the server), cost ${LOCAL_COST_NOTE}`
 			: `  jev: ${cost.calls} calls, ${cost.inputTokens.toLocaleString()} input tokens, cost ${formatUsd(cost.costUsd)}`)
 	);
 }
