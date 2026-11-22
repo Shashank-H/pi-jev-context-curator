@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { findModel, freeLoopbackUrl, inspectServer, managedServerUrl, MODELS, probe, recommend } from "../extensions/curator-jev/semif.ts";
 import { softmax } from "../extensions/curator-jev/readout.ts";
@@ -47,6 +52,68 @@ test("managed server URLs are normalized to bindable HTTP loopback origins", () 
 	assert.equal(managedServerUrl("http://[::1]:9876"), "http://[::1]:9876");
 	assert.equal(managedServerUrl("https://127.0.0.1:3000"), undefined);
 	assert.equal(managedServerUrl("http://127.0.0.1:3000/prefix"), undefined);
+});
+
+test("SemifServer.stop kills its server if graceful termination hangs", () => {
+	const dir = mkdtempSync(join(tmpdir(), "semif-shutdown-"));
+	const bin = join(dir, "bin");
+	const pidFile = join(dir, "server.pid");
+	mkdirSync(bin);
+	const mockServer = join(dir, "mock-server.mjs");
+	writeFileSync(mockServer, `
+		import { createServer } from "node:http";
+		import { writeFileSync } from "node:fs";
+		const args = process.argv.slice(2);
+		const arg = (name) => args[args.indexOf(name) + 1];
+		writeFileSync(process.env.FAKE_SERVER_PID, String(process.pid));
+		process.on("SIGTERM", () => {});
+		createServer((req, res) => {
+			res.setHeader("content-type", "application/json");
+			if (req.url === "/health") res.end(JSON.stringify({ status: "ok" }));
+			else if (req.url === "/v1/models") res.end(JSON.stringify({ data: [{ id: arg("--alias") }] }));
+			else { res.statusCode = 404; res.end(); }
+		}).listen(Number(arg("--port")), arg("--host"));
+	`);
+	writeFileSync(
+		join(bin, "llama-server"),
+		`#!/bin/sh\nif [ "$1" = "--version" ]; then echo test; exit 0; fi\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockServer)} "$@"\n`,
+		{ mode: 0o755 },
+	);
+	const script = `
+		import { mkdirSync, writeFileSync } from "node:fs";
+		import { dirname } from "node:path";
+		const semif = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "extensions/curator-jev/semif.ts")).href)});
+		const model = semif.MODELS[0];
+		mkdirSync(dirname(semif.modelPath(model)), { recursive: true });
+		writeFileSync(semif.modelPath(model), "test model");
+		const baseUrl = await semif.freeLoopbackUrl();
+		const server = new semif.SemifServer();
+		const error = await server.start(model, baseUrl, () => {});
+		if (error) throw new Error(error);
+		if (!(await semif.inspectServer(baseUrl, 100)).ready) throw new Error("test server did not start");
+		server.stop();
+		const stoppedBy = Date.now() + 6000;
+		while (Date.now() < stoppedBy && (await semif.inspectServer(baseUrl, 100)).listening) await new Promise((r) => setTimeout(r, 50));
+		if ((await semif.inspectServer(baseUrl, 100)).listening) throw new Error("server survived stop");
+		console.log("server stopped");
+	`;
+	try {
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			HOME: join(dir, "home"),
+			PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+			CURATOR_JEV_CONFIG: join(dir, "config.json"),
+			FAKE_SERVER_PID: pidFile,
+		};
+		delete env.CURATOR_JEV_PROVIDER;
+		const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), env, timeout: 12000 });
+		assert.equal(output.toString().trim(), "server stopped");
+	} finally {
+		if (existsSync(pidFile)) {
+			try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch { /* already exited */ }
+		}
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("free loopback URL uses an ephemeral available port", async () => {

@@ -232,11 +232,21 @@ export class SemifServer {
 		}
 	}
 
+	private terminate(child: ChildProcess | undefined): void {
+		if (!child || child.exitCode !== null) return;
+		child.kill("SIGTERM");
+		const forceKill = setTimeout(() => {
+			if (child.exitCode === null) child.kill("SIGKILL");
+		}, 3000);
+		forceKill.unref();
+		child.once("exit", () => clearTimeout(forceKill));
+	}
+
 	stop(): void {
 		this.generation++;
-		this.download?.kill();
+		this.terminate(this.download);
 		this.download = undefined;
-		this.child?.kill();
+		this.terminate(this.child);
 		this.child = undefined;
 	}
 }
