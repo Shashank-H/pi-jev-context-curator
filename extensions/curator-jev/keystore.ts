@@ -12,28 +12,39 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-export const CONFIG_FILE = join(homedir(), ".pi", "curator-jev.json");
+export const CONFIG_FILE = process.env.CURATOR_JEV_CONFIG || join(homedir(), ".pi", "curator-jev.json");
 
 export interface ApiKeyResolution {
 	key: string | undefined;
 	source: string;
 }
 
-export function loadPersistedKey(): string | undefined {
+export interface UserSettings {
+	threshold?: number;
+	minTokens?: number;
+	frequency?: number;
+}
+
+type Persisted = { apiKey?: string; mode?: string; model?: string; localBaseUrl?: string; settings?: UserSettings };
+
+function readPersisted(): Persisted {
 	try {
-		if (!existsSync(CONFIG_FILE)) return undefined;
-		const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as { apiKey?: unknown };
-		return typeof raw.apiKey === "string" && raw.apiKey.length > 0 ? raw.apiKey : undefined;
+		if (!existsSync(CONFIG_FILE)) return {};
+		const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as Persisted;
+		return raw && typeof raw === "object" ? raw : {};
 	} catch {
-		return undefined;
+		return {};
 	}
 }
 
-export function persistKey(key: string): void {
-	mkdirSync(join(homedir(), ".pi"), { recursive: true });
-	writeFileSync(CONFIG_FILE, JSON.stringify({ apiKey: key }, null, 2) + "\n", { mode: 0o600 });
+/** Read-modify-write so the key and the mode never clobber each other. */
+function writePersisted(patch: Persisted): void {
+	mkdirSync(dirname(CONFIG_FILE), { recursive: true });
+	const next = { ...readPersisted(), ...patch };
+	for (const k of Object.keys(next) as (keyof Persisted)[]) if (next[k] === undefined) delete next[k];
+	writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
 	try {
 		chmodSync(CONFIG_FILE, 0o600);
 	} catch {
@@ -41,13 +52,34 @@ export function persistKey(key: string): void {
 	}
 }
 
-export function clearPersistedKey(): void {
-	try {
-		writeFileSync(CONFIG_FILE, JSON.stringify({}, null, 2) + "\n", { mode: 0o600 });
-	} catch {
-		/* best effort */
-	}
+export function loadPersistedKey(): string | undefined {
+	const { apiKey } = readPersisted();
+	return typeof apiKey === "string" && apiKey.length > 0 ? apiKey : undefined;
 }
+
+export const persistKey = (key: string): void => writePersisted({ apiKey: key });
+export const clearPersistedKey = (): void => writePersisted({ apiKey: undefined });
+
+/** Persisted curation mode: "typesafe" (default) or "semif". */
+export function loadPersistedMode(): string | undefined {
+	const { mode } = readPersisted();
+	return typeof mode === "string" ? mode : undefined;
+}
+export const persistMode = (mode: string): void => writePersisted({ mode });
+
+/** Persisted SemIf model id (see semif.ts MODELS). */
+export const loadPersistedModel = (): string | undefined => readPersisted().model;
+export const persistModel = (model: string): void => writePersisted({ model });
+
+export const loadLocalBaseUrl = (): string | undefined => readPersisted().localBaseUrl;
+export const persistLocalBaseUrl = (localBaseUrl: string): void => writePersisted({ localBaseUrl });
+
+export const loadUserSettings = (): UserSettings => {
+	const settings = readPersisted().settings;
+	return settings && typeof settings === "object" ? settings : {};
+};
+export const persistUserSettings = (patch: UserSettings): void =>
+	writePersisted({ settings: { ...loadUserSettings(), ...patch } });
 
 export function resolveApiKey(sessionKey: string | undefined): ApiKeyResolution {
 	if (sessionKey) {
